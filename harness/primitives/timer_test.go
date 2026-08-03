@@ -2,6 +2,7 @@ package primitives_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -25,6 +26,7 @@ func TestScheduleTimerFiresAtAbsoluteDeadline(t *testing.T) {
 		assertNoTimerEvent(t, events)
 
 		time.Sleep(time.Nanosecond)
+		event := singleEvent(t, collectEvents(events), primitives.PrimitiveEventTimerFired)
 		if event.Source != request.Source || event.CorrelationID != request.CorrelationID {
 			t.Fatalf("event identity = (%q, %q)", event.Source, event.CorrelationID)
 		}
@@ -47,6 +49,7 @@ func TestScheduleTimerFiresImmediatelyAtExpiredDeadline(t *testing.T) {
 			Deadline:      startedAt.Add(-time.Hour),
 		}
 
+		event := singleEvent(
 			t,
 			primitives.PrimitiveEventTimerFired,
 		)
@@ -70,6 +73,7 @@ func TestScheduleTimerCanceledBeforeStart(t *testing.T) {
 			Deadline:      time.Now().Add(time.Hour),
 		}
 
+		event := singleEvent(
 			t,
 			primitives.PrimitiveEventCanceled,
 		)
@@ -90,11 +94,31 @@ func TestScheduleTimerCancellationInterruptsWait(t *testing.T) {
 		assertNoTimerEvent(t, events)
 
 		cancel()
+		event := singleEvent(t, collectEvents(events), primitives.PrimitiveEventCanceled)
 		assertCanceledTimerIdentity(t, event, request)
 		if !time.Now().Equal(startedAt) {
 			t.Fatalf("cancellation advanced time to %s, want %s", time.Now(), startedAt)
 		}
 	})
+}
+
+func TestScheduleTimerRejectsUnsetDeadline(t *testing.T) {
+	request := primitives.TimerRequest{
+		Source:        "operation-1",
+		CorrelationID: "timer-1",
+	}
+
+	event := singleEvent(
+		t,
+		primitives.PrimitiveEventFailed,
+	)
+	if event.Source != request.Source || event.CorrelationID != request.CorrelationID {
+		t.Fatalf("event identity = (%q, %q)", event.Source, event.CorrelationID)
+	}
+	result := eventResult[primitives.PrimitiveFailureResult](t, event)
+	if !strings.Contains(result.Error, "deadline must be set") {
+		t.Fatalf("error = %q", result.Error)
+	}
 }
 
 func assertNoTimerEvent(t *testing.T, events <-chan primitives.PrimitiveEvent) {
