@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
+	"golang.org/x/sys/unix"
 )
 
 	contents := make([]byte, primitives.IOReadChunkSize*3+17)
@@ -173,9 +174,11 @@ func TestReadFileIgnoresAdvisoryFileLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := unix.Flock(int(locked.Fd()), unix.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		if err := unix.Flock(int(locked.Fd()), unix.LOCK_UN); err != nil {
 			t.Error(err)
 		}
 		if err := locked.Close(); err != nil {
@@ -199,6 +202,7 @@ func TestReadFileIgnoresAdvisoryFileLock(t *testing.T) {
 
 func TestReadFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "input.fifo")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)

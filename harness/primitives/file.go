@@ -52,6 +52,19 @@ func streamFile(ctx context.Context, request IOReadRequest, events chan<- Primit
 		events <- ioReadFailure(request, fmt.Errorf("open %q: %w", request.Path, err))
 		return
 	}
+	inspectAndStreamFile(ctx, request, file, events)
+}
+
+type inspectedReadFile interface {
+	Stat() (os.FileInfo, error)
+}
+
+func inspectAndStreamFile(
+	ctx context.Context,
+	request IOReadRequest,
+	file inspectedReadFile,
+	events chan<- PrimitiveEvent,
+) {
 	info, err := file.Stat()
 	if err != nil {
 		events <- ioReadFailure(request, errors.Join(
@@ -174,3 +187,18 @@ func ioCreateCanceled(request IOCreateRequest) PrimitiveEvent {
 	return primitiveCanceled(request.Source, request.CorrelationID)
 }
 
+func isOnlyContextCancellation(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		for _, cause := range causes {
+			if !isOnlyContextCancellation(cause) {
+				return false
+			}
+		}
+		return len(causes) > 0
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return isOnlyContextCancellation(wrapped.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
+}

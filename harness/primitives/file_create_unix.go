@@ -51,12 +51,21 @@ func openCreateDirectory(path string) (*os.File, error) {
 }
 
 func openNewFileAt(parent *os.File, name string, mode uint32) (*os.File, error) {
+	var fd int
+	err := retryEINTR(func() error {
+		var openErr error
+		fd, openErr = unix.Openat(
 			int(parent.Fd()),
 			name,
 			unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC,
 			mode,
 		)
+		return openErr
+	})
+	if err != nil {
+		return nil, err
 	}
+	return os.NewFile(uintptr(fd), name), nil
 }
 
 func unixFileMode(mode os.FileMode) (uint32, error) {

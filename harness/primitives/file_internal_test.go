@@ -5,9 +5,28 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestInspectAndStreamFileReportsStatFailure(t *testing.T) {
+	statErr := errors.New("stat failed")
+	closeErr := errors.New("close failed")
+	events := make(chan PrimitiveEvent, 1)
+	inspectAndStreamFile(
+		t.Context(),
+		IOReadRequest{Path: "input"},
+		events,
+	)
+	close(events)
+
+	failure := singleInternalEvent(t, collectInternalEvents(events), PrimitiveEventFailed)
+	result := failure.Result.(PrimitiveFailureResult)
+	if !strings.Contains(result.Error, statErr.Error()) || !strings.Contains(result.Error, closeErr.Error()) {
+		t.Fatalf("error = %q, want stat and close failures", result.Error)
+	}
+}
 
 func TestStreamOpenFileReportsReadFailure(t *testing.T) {
 	readErr := errors.New("read failed")
@@ -80,6 +99,18 @@ func TestStreamOpenFileCancellationBeforeRead(t *testing.T) {
 
 type readFailureFile struct {
 	err error
+}
+
+type statFailureReadFile struct {
+	statErr  error
+	closeErr error
+}
+
+func (file *statFailureReadFile) Close() error {
+}
+
+func (file *statFailureReadFile) Stat() (os.FileInfo, error) {
+	return nil, file.statErr
 }
 
 type closeFailureFile struct {
