@@ -1,0 +1,278 @@
+package primitives_test
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/unreallabsai/unreal-agent/harness/primitives"
+)
+
+func TestCreateFileCreatesEmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "created")
+	request := primitives.IOCreateRequest{
+		Source:        "operation-1",
+		CorrelationID: "create-1",
+		Path:          path,
+		Mode:          primitives.IOCreateDefaultMode,
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.Type != primitives.PrimitiveEventIOCreateCompleted {
+		t.Fatalf("event type = %q, want %q", event.Type, primitives.PrimitiveEventIOCreateCompleted)
+	}
+	if event.Source != request.Source || event.CorrelationID != request.CorrelationID {
+		t.Fatalf("event identity = (%q, %q)", event.Source, event.CorrelationID)
+	}
+	result := eventResult[primitives.IOCreateResult](t, event)
+	}
+
+	created, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 0 {
+		t.Fatalf("created contents = %q, want empty", created)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&^0o664 != 0 {
+		t.Fatalf("mode = %o, exceeds requested permissions 664", info.Mode().Perm())
+	}
+}
+
+func TestCreateFileUsesRequestedMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "created")
+		Path: path,
+		Mode: 0o600,
+	}))
+	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventIOCreateCompleted {
+		t.Fatalf("events = %#v, want one completion", events)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+	path := filepath.Join(t.TempDir(), "created")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0 {
+		t.Fatalf("mode = %o, want 0", info.Mode().Perm())
+	}
+}
+
+	existing := []byte("existing contents")
+	path := writeTestFile(t, existing)
+	request := primitives.IOCreateRequest{
+		Path: path,
+	}
+
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents, existing) {
+		t.Fatalf("contents = %q, want %q", contents, existing)
+	}
+}
+
+func TestCreateFileCanceledBeforeStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	path := filepath.Join(t.TempDir(), "canceled")
+
+		Path: path,
+		Mode: primitives.IOCreateDefaultMode,
+	}))
+	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventCanceled {
+		t.Fatalf("events = %#v, want one cancellation", events)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stat canceled path: %v, want not exist", err)
+	}
+}
+
+func TestCreateFileFailureIsTerminal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "created")
+	request := primitives.IOCreateRequest{
+		Source:        "operation-1",
+		CorrelationID: "create-1",
+		Path:          path,
+	}
+
+	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventFailed {
+		t.Fatalf("events = %#v, want one failure", events)
+	}
+	result := eventResult[primitives.PrimitiveFailureResult](t, events[0])
+	if result.Error == "" {
+		t.Fatal("failure error is empty")
+	}
+	if events[0].Source != request.Source || events[0].CorrelationID != request.CorrelationID {
+		t.Fatalf("event identity = (%q, %q)", events[0].Source, events[0].CorrelationID)
+	}
+}
+
+	const processCount = 6
+	directory := t.TempDir()
+	path := filepath.Join(directory, "created")
+	startReader, startWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyReader, readyWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type childProcess struct {
+		command *exec.Cmd
+		stdout  bytes.Buffer
+		stderr  bytes.Buffer
+	}
+	children := make([]childProcess, processCount)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	for index := range children {
+		command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCreateFileProcessHelper$")
+		command.Env = append(os.Environ(),
+			"HARNESS_CREATE_FILE_HELPER=1",
+			"HARNESS_CREATE_FILE_PATH="+path,
+		)
+		command.ExtraFiles = []*os.File{startReader, readyWriter}
+		command.Stdout = &children[index].stdout
+		command.Stderr = &children[index].stderr
+		children[index].command = command
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := startReader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := readyWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ready := make([]byte, processCount)
+	if _, err := io.ReadFull(readyReader, ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := readyReader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := startWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make([]createProcessResult, processCount)
+	completedCount := 0
+	failureCount := 0
+	for index := range children {
+		child := &children[index]
+		if err := child.command.Wait(); err != nil {
+			t.Fatalf(
+				"child %d: %v\nstdout:\n%s\nstderr:\n%s",
+				index,
+				err,
+				child.stdout.String(),
+				child.stderr.String(),
+			)
+		}
+			t.Fatalf("decode child %d output %q: %v", index, child.stdout.String(), err)
+		}
+		if results[index].Completed {
+			completedCount++
+		}
+		if results[index].Error != "" {
+			failureCount++
+		}
+	}
+	}
+	}
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contents) != 0 {
+		t.Fatalf("contents = %q, want empty", contents)
+	}
+		}
+	}
+
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+		t.Fatalf("directory entries = %#v, want only created file", entries)
+	}
+}
+
+type createProcessResult struct {
+}
+
+func TestCreateFileProcessHelper(t *testing.T) {
+	if os.Getenv("HARNESS_CREATE_FILE_HELPER") != "1" {
+		return
+	}
+	start := os.NewFile(3, "create-start")
+	if start == nil {
+		t.Fatal("start file is unavailable")
+	}
+	ready := os.NewFile(4, "create-ready")
+	if ready == nil {
+		t.Fatal("ready file is unavailable")
+	}
+	if _, err := ready.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ready.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, start); err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := primitives.IOCreateRequest{
+		Path: os.Getenv("HARNESS_CREATE_FILE_PATH"),
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+
+	result := createProcessResult{}
+	switch events[0].Type {
+	case primitives.PrimitiveEventIOCreateCompleted:
+		completed := eventResult[primitives.IOCreateResult](t, events[0])
+		result.Completed = true
+	case primitives.PrimitiveEventFailed:
+		result.Error = eventResult[primitives.PrimitiveFailureResult](t, events[0]).Error
+	default:
+		result.Error = fmt.Sprintf("unexpected event type %q", events[0].Type)
+	}
+		t.Fatal(err)
+	}
+}

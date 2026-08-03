@@ -14,6 +14,8 @@ const (
 	PrimitiveEventIOReadOutput      PrimitiveEventType = "io.read_output"
 	PrimitiveEventIOReadCompleted   PrimitiveEventType = "io.read_completed"
 
+	IOCreateDefaultMode os.FileMode = 0o664
+	IOReadChunkSize                 = 32 * 1024
 )
 
 type IOReadRequest struct {
@@ -128,9 +130,11 @@ func validateIOReadRequest(request IOReadRequest) error {
 }
 
 func ioReadFailure(request IOReadRequest, err error) PrimitiveEvent {
+	return primitiveFailure(request.Source, request.CorrelationID, err)
 }
 
 func ioReadCanceled(request IOReadRequest) PrimitiveEvent {
+	return primitiveCanceled(request.Source, request.CorrelationID)
 }
 
 type IOCreateRequest struct {
@@ -140,5 +144,33 @@ type IOCreateRequest struct {
 }
 
 type IOCreateResult struct {
+}
+
+}
+
+	if ctx.Err() != nil {
+		events <- ioCreateCanceled(request)
+		return
+	}
+
+	if err != nil {
+		events <- ioCreateFailure(request, err)
+		return
+	}
+
+	events <- PrimitiveEvent{
+		Type:          PrimitiveEventIOCreateCompleted,
+		Source:        request.Source,
+		CorrelationID: request.CorrelationID,
+		Result:        result,
+	}
+}
+
+func ioCreateFailure(request IOCreateRequest, err error) PrimitiveEvent {
+	return primitiveFailure(request.Source, request.CorrelationID, err)
+}
+
+func ioCreateCanceled(request IOCreateRequest) PrimitiveEvent {
+	return primitiveCanceled(request.Source, request.CorrelationID)
 }
 

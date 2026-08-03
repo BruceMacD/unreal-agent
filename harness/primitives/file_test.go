@@ -106,6 +106,7 @@ func TestReadFileCanceledBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
+	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventCanceled {
 		t.Fatalf("events = %#v, want one cancellation", events)
 	}
 }
@@ -128,6 +129,7 @@ func TestReadFileCancellationTerminatesStream(t *testing.T) {
 		case primitives.PrimitiveEventIOReadOutput:
 			outputEvents++
 			cancel()
+		case primitives.PrimitiveEventCanceled:
 			canceledEvents++
 		case primitives.PrimitiveEventIOReadCompleted:
 			t.Fatal("canceled read completed")
@@ -161,6 +163,37 @@ func TestReadFileFailureIsTerminal(t *testing.T) {
 	result := eventResult[primitives.PrimitiveFailureResult](t, events[0])
 	if !strings.Contains(result.Error, "missing") {
 		t.Fatalf("error = %q, want missing path", result.Error)
+	}
+}
+
+func TestReadFileIgnoresAdvisoryFileLock(t *testing.T) {
+	contents := []byte("locked contents")
+	path := writeTestFile(t, contents)
+	locked, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+			t.Error(err)
+		}
+		if err := locked.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+		Path:  path,
+		Count: int64(len(contents)),
+	}))
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want output and completion", events)
+	}
+	if events[0].Type != primitives.PrimitiveEventIOReadOutput ||
+		events[1].Type != primitives.PrimitiveEventIOReadCompleted {
+		t.Fatalf("event types = (%q, %q), want output and completion", events[0].Type, events[1].Type)
 	}
 }
 

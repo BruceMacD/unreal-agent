@@ -39,6 +39,7 @@ func TestStreamOpenFileCancellationWhileSendingOutput(t *testing.T) {
 		closeErr  error
 		eventType PrimitiveEventType
 	}{
+		{name: "closed", eventType: PrimitiveEventCanceled},
 		{name: "close failure", closeErr: errors.New("close failed"), eventType: PrimitiveEventFailed},
 		t.Run(test.name, func(t *testing.T) {
 			defer cancel()
@@ -64,11 +65,13 @@ func TestStreamOpenFileCancellationAfterClose(t *testing.T) {
 	cancel()
 	close(file.release)
 
+	singleInternalEvent(t, collectInternalEvents(events), PrimitiveEventCanceled)
 }
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
+	singleInternalEvent(t, collectInternalEvents(events), PrimitiveEventCanceled)
 }
 
 func TestStreamOpenFileCancellationBeforeRead(t *testing.T) {
