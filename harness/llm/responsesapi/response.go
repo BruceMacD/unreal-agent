@@ -9,10 +9,21 @@ import (
 )
 
 func decodeResponse(body []byte) (llm.Response, error) {
+	var envelope struct {
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return llm.Response{}, fmt.Errorf("decode response: %w", err)
+	}
 	var source openaiapi.Response
 	if err := json.Unmarshal(body, &source); err != nil {
 		return llm.Response{}, fmt.Errorf("decode response: %w", err)
 	}
+	converted, err := response(source)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	converted.Usage.Raw = envelope.Usage
+	return converted, nil
 }
 
 func response(source openaiapi.Response) (llm.Response, error) {

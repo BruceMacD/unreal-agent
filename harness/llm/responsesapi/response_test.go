@@ -100,3 +100,19 @@ func TestResponseIgnoresUnfinishedToolCall(t *testing.T) {
 		t.Fatalf("output = %#v", response.Output)
 	}
 }
+
+func TestResponsePreservesRawUsage(t *testing.T) {
+	raw := `{"input_tokens":7,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":4},"total_tokens":12,"cost":0.0042,"provider_usage":{"prompt_tokens":7}}`
+	response, err := decodeResponse([]byte(`{"id":"response-1","status":"completed","output":[],"usage":` + raw + `}`))
+	if err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Usage.InputTokens != 7 || response.Usage.CachedInputTokens != 3 ||
+		response.Usage.CacheWriteInputTokens != 2 || response.Usage.OutputTokens != 5 ||
+		response.Usage.ReasoningTokens != 4 {
+		t.Fatalf("usage = %#v", response.Usage)
+	}
+	if string(response.Usage.Raw) != raw {
+		t.Fatalf("raw usage = %s, want %s", response.Usage.Raw, raw)
+	}
+}

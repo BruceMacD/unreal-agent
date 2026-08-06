@@ -89,6 +89,7 @@ func TestAdapterResponds(t *testing.T) {
 		Usage: llm.Usage{
 			InputTokens: 20, CachedInputTokens: 8, CacheWriteInputTokens: 3,
 			OutputTokens: 10, ReasoningTokens: 4,
+				`"output_tokens":10,"output_tokens_details":{"reasoning_tokens":4},"total_tokens":30}`),
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -157,6 +158,9 @@ func TestResponseSeparatesStopReasonsFromFailures(t *testing.T) {
 			body: `{"id":"resp-1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":2,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{}}}`,
 			want: llm.Response{
 				ID: "resp-1", Stop: llm.StopMaxOutputTokens, Output: []llm.Item{},
+				Usage: llm.Usage{
+					InputTokens: 2, OutputTokens: 1,
+				},
 			},
 		},
 		{
@@ -164,6 +168,9 @@ func TestResponseSeparatesStopReasonsFromFailures(t *testing.T) {
 			body: `{"id":"resp-2","status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[],"usage":{"input_tokens":2,"input_tokens_details":{},"output_tokens":0,"output_tokens_details":{}}}`,
 			want: llm.Response{
 				ID: "resp-2", Stop: llm.StopRefused, Output: []llm.Item{},
+				Usage: llm.Usage{
+					InputTokens: 2,
+				},
 			},
 		},
 		{
@@ -171,6 +178,9 @@ func TestResponseSeparatesStopReasonsFromFailures(t *testing.T) {
 			body: `{"id":"resp-3","status":"failed","error":{"code":"server_error","message":"failed"},"output":[],"usage":{"input_tokens":2,"input_tokens_details":{},"output_tokens":0,"output_tokens_details":{}}}`,
 			want: llm.Response{
 				ID: "resp-3", Output: []llm.Item{},
+				Usage: llm.Usage{
+					InputTokens: 2,
+				},
 				Failure: &llm.Failure{Code: "server_error", Message: "failed"},
 			},
 		},
