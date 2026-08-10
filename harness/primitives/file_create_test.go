@@ -19,6 +19,7 @@ func TestCreateFileCreatesEmptyFile(t *testing.T) {
 	request := primitives.IOCreateRequest{
 		Source:        "operation-1",
 		CorrelationID: "create-1",
+		Kind:          primitives.IOCreateRegularFile,
 		Path:          path,
 		Mode:          primitives.IOCreateDefaultMode,
 	}
@@ -34,6 +35,8 @@ func TestCreateFileCreatesEmptyFile(t *testing.T) {
 		t.Fatalf("event identity = (%q, %q)", event.Source, event.CorrelationID)
 	}
 	result := eventResult[primitives.IOCreateResult](t, event)
+	if result.Kind != primitives.IOCreateRegularFile {
+		t.Fatalf("result = %#v", result)
 	}
 
 	created, err := os.ReadFile(path)
@@ -54,6 +57,7 @@ func TestCreateFileCreatesEmptyFile(t *testing.T) {
 
 func TestCreateFileUsesRequestedMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "created")
+		Kind: primitives.IOCreateRegularFile,
 		Path: path,
 		Mode: 0o600,
 	}))
@@ -80,9 +84,105 @@ func TestCreateFileUsesRequestedMode(t *testing.T) {
 	}
 }
 
+func TestCreateDirectoryCreatesEmptyDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "created")
+	request := primitives.IOCreateRequest{
+		Source:        "operation-1",
+		CorrelationID: "create-1",
+		Kind:          primitives.IOCreateDirectory,
+		Path:          path,
+		Mode:          0o700,
+	}
+
+	event := singleEvent(
+		t,
+		primitives.PrimitiveEventIOCreateCompleted,
+	)
+	result := eventResult[primitives.IOCreateResult](t, event)
+	if result.Kind != primitives.IOCreateDirectory {
+		t.Fatalf("result = %#v", result)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("created mode = %v, want directory 0700", info.Mode())
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("directory entries = %#v, want empty", entries)
+	}
+}
+
+	path := filepath.Join(t.TempDir(), "created")
+	event := singleEvent(
+		t,
+			Kind: primitives.IOCreateDirectory,
+		})),
+		primitives.PrimitiveEventIOCreateCompleted,
+	)
+	if result := eventResult[primitives.IOCreateResult](t, event); result.Kind != primitives.IOCreateDirectory {
+		t.Fatalf("result = %#v", result)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	}
+}
+
+	path := filepath.Join(t.TempDir(), "created")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	}
+}
+
+func TestCreateDirectoryPreservesPathResolution(t *testing.T) {
+	directory := t.TempDir()
+	separator := string(os.PathSeparator)
+	path := directory + separator + "missing" + separator + ".." + separator + "created" + separator
+	event := singleEvent(
+		t,
+			Kind: primitives.IOCreateDirectory,
+			Path: path,
+			Mode: 0o700,
+		})),
+		primitives.PrimitiveEventFailed,
+	)
+	if failure := eventResult[primitives.PrimitiveFailureResult](t, event); failure.Error == "" {
+		t.Fatal("failure error is empty")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "created")); !os.IsNotExist(err) {
+		t.Fatalf("stat cleaned target: %v, want not exist", err)
+	}
+}
+
+func TestCreateRejectsUnsupportedKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "created")
+	event := singleEvent(
+		t,
+		primitives.PrimitiveEventFailed,
+	)
+	failure := eventResult[primitives.PrimitiveFailureResult](t, event)
+	if failure.Error == "" {
+		t.Fatal("failure error is empty")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stat rejected path: %v, want not exist", err)
+	}
+}
+
 	existing := []byte("existing contents")
 	path := writeTestFile(t, existing)
 	request := primitives.IOCreateRequest{
+		Kind: primitives.IOCreateRegularFile,
 		Path: path,
 	}
 
@@ -101,6 +201,7 @@ func TestCreateFileCanceledBeforeStart(t *testing.T) {
 	cancel()
 	path := filepath.Join(t.TempDir(), "canceled")
 
+		Kind: primitives.IOCreateRegularFile,
 		Path: path,
 		Mode: primitives.IOCreateDefaultMode,
 	}))
@@ -117,6 +218,7 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 	request := primitives.IOCreateRequest{
 		Source:        "operation-1",
 		CorrelationID: "create-1",
+		Kind:          primitives.IOCreateRegularFile,
 		Path:          path,
 	}
 
@@ -216,6 +318,8 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 	if len(contents) != 0 {
 		t.Fatalf("contents = %q, want empty", contents)
 	}
+	for _, result := range results {
+			t.Fatalf("child result = %#v", result)
 		}
 	}
 
@@ -229,6 +333,9 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 }
 
 type createProcessResult struct {
+	Completed bool
+	Kind      primitives.IOCreateKind
+	Error     string
 }
 
 func TestCreateFileProcessHelper(t *testing.T) {
@@ -257,6 +364,7 @@ func TestCreateFileProcessHelper(t *testing.T) {
 	}
 
 	request := primitives.IOCreateRequest{
+		Kind: primitives.IOCreateRegularFile,
 		Path: os.Getenv("HARNESS_CREATE_FILE_PATH"),
 	}
 	if len(events) != 1 {
@@ -268,6 +376,7 @@ func TestCreateFileProcessHelper(t *testing.T) {
 	case primitives.PrimitiveEventIOCreateCompleted:
 		completed := eventResult[primitives.IOCreateResult](t, events[0])
 		result.Completed = true
+		result.Kind = completed.Kind
 	case primitives.PrimitiveEventFailed:
 		result.Error = eventResult[primitives.PrimitiveFailureResult](t, events[0]).Error
 	default:

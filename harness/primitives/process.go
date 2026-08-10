@@ -40,7 +40,18 @@ type ProcessStartRequest struct {
 	Arguments   []string
 	Directory   string
 	Environment []string
+	Pipes       ProcessPipeSet
 }
+
+type ProcessPipeSet uint8
+
+const (
+	ProcessPipeStdin ProcessPipeSet = 1 << iota
+	ProcessPipeStdout
+	ProcessPipeStderr
+
+	ProcessPipeAll = ProcessPipeStdin | ProcessPipeStdout | ProcessPipeStderr
+)
 
 type ProcessStartedResult struct {
 	PID int
@@ -136,6 +147,10 @@ func (process *ProcessInvocation) writeInput(
 		}
 		return
 	}
+	if process.stdin == nil {
+		events <- processInputWriteFailure(request, 0, errors.New("stdin pipe is unavailable"))
+		return
+	}
 	count, err := process.stdin.Write(request.Data)
 	if err == nil {
 		events <- PrimitiveEvent{
@@ -181,6 +196,10 @@ func (process *ProcessInvocation) closeInput(
 		events <- processControlFailure(request.Source, request.CorrelationID, "close process input", err)
 		return
 	}
+	if process.stdin == nil {
+		events <- processInputClosed(request)
+		return
+	}
 	if err := normalizeProcessCloseError(process.stdin.Close()); err != nil {
 		events <- processFailure(
 			request.Source,
@@ -189,6 +208,11 @@ func (process *ProcessInvocation) closeInput(
 		)
 		return
 	}
+	events <- processInputClosed(request)
+}
+
+func processInputClosed(request ProcessCloseInputRequest) PrimitiveEvent {
+	return PrimitiveEvent{
 		Type:          PrimitiveEventProcessInputClosed,
 		Source:        request.Source,
 		CorrelationID: request.CorrelationID,
@@ -342,12 +366,25 @@ func runProcess(
 		waitCompleted <- command.Wait()
 	}()
 	var workers sync.WaitGroup
+	if parentPipes.stdout != nil {
+		stdout := processOutputState{stream: ProcessStdout, reader: parentPipes.stdout}
+		workers.Go(func() {
+			runProcessOutput(ctx, request, &stdout, events)
+		})
+	}
+	if parentPipes.stderr != nil {
+		stderr := processOutputState{stream: ProcessStderr, reader: parentPipes.stderr}
+		workers.Go(func() {
+			runProcessOutput(ctx, request, &stderr, events)
+		})
+	}
 
 		ctx,
 		command.Process,
 		parentPipes,
 		waitCompleted,
 	)
+	stdinCloseErr := closeProcessFile(parentPipes.stdin)
 	outputFinishErr := error(nil)
 	if !canceled {
 		outputFinishErr = parentPipes.finishOutput()
@@ -433,16 +470,52 @@ type processParentPipes struct {
 
 func prepareProcess(request ProcessStartRequest) (*exec.Cmd, processPipes, error) {
 	var pipes processPipes
+	if request.Pipes&ProcessPipeStdin != 0 {
+		stdinRead, stdinWrite, err := os.Pipe()
+		if err != nil {
+			return nil, pipes, fmt.Errorf("start process %q: create stdin pipe: %w", request.Path, err)
+		}
+		pipes.stdinRead = stdinRead
+		pipes.stdinWrite = stdinWrite
 	}
 
+	if request.Pipes&ProcessPipeStdout != 0 {
+		stdoutRead, stdoutWrite, err := os.Pipe()
+		if err != nil {
+			return nil, pipes, errors.Join(
+				fmt.Errorf("start process %q: create stdout pipe: %w", request.Path, err),
+				pipes.closeAll(),
+			)
+		}
+		pipes.stdoutRead = stdoutRead
+		pipes.stdoutWrite = stdoutWrite
 	}
 
+	if request.Pipes&ProcessPipeStderr != 0 {
+		stderrRead, stderrWrite, err := os.Pipe()
+		if err != nil {
+			return nil, pipes, errors.Join(
+				fmt.Errorf("start process %q: create stderr pipe: %w", request.Path, err),
+				pipes.closeAll(),
+			)
+		}
+		pipes.stderrRead = stderrRead
+		pipes.stderrWrite = stderrWrite
 	}
 
 	command := exec.Command(request.Path, request.Arguments...)
 	command.Dir = request.Directory
 	command.Env = request.Environment
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if pipes.stdinRead != nil {
+		command.Stdin = pipes.stdinRead
+	}
+	if pipes.stdoutWrite != nil {
+		command.Stdout = pipes.stdoutWrite
+	}
+	if pipes.stderrWrite != nil {
+		command.Stderr = pipes.stderrWrite
+	}
 	return command, pipes, nil
 }
 
@@ -453,6 +526,9 @@ func (pipes processPipes) parent() processParentPipes {
 
 func (pipes processPipes) closeChildEnds() error {
 	return errors.Join(
+		closeProcessFile(pipes.stdinRead),
+		closeProcessFile(pipes.stdoutWrite),
+		closeProcessFile(pipes.stderrWrite),
 	)
 }
 
@@ -485,6 +561,9 @@ func (pipes processParentPipes) finishOutput() error {
 }
 
 func finishProcessOutput(file *os.File, deadline time.Time) error {
+	if file == nil {
+		return nil
+	}
 	deadlineErr := file.SetReadDeadline(deadline)
 	if deadlineErr == nil {
 		return nil
@@ -716,6 +795,9 @@ func validateProcessStartRequest(request ProcessStartRequest) error {
 	}
 	if !filepath.IsAbs(request.Path) {
 		return errors.New("start process: path must be absolute")
+	}
+	if request.Pipes&^ProcessPipeAll != 0 {
+		return fmt.Errorf("start process: unsupported pipe selection %#x", request.Pipes)
 	}
 	return nil
 }

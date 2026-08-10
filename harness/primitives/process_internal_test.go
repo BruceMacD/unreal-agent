@@ -377,6 +377,7 @@ func TestRunProcessCanceledAfterPreparingPipes(t *testing.T) {
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
+		Pipes:         ProcessPipeAll,
 	}
 	events := make(chan PrimitiveEvent, 1)
 	invocation := &ProcessInvocation{
@@ -386,6 +387,19 @@ func TestRunProcessCanceledAfterPreparingPipes(t *testing.T) {
 	event, ok := <-events
 	if !ok || event.Type != PrimitiveEventCanceled || invocation.process != nil {
 		t.Fatalf("event = %#v, process = %#v", event, invocation.process)
+	}
+}
+
+func TestPrepareProcessUsesNoPipesForZeroSelection(t *testing.T) {
+	command, pipes, err := prepareProcess(ProcessStartRequest{Path: "/usr/bin/true"})
+	if err != nil {
+		t.Fatalf("prepare process: %v", err)
+	}
+	if command.Stdin != nil || command.Stdout != nil || command.Stderr != nil {
+		t.Fatalf("stdio = (%#v, %#v, %#v)", command.Stdin, command.Stdout, command.Stderr)
+	}
+	if pipes.stdinRead != nil || pipes.stdinWrite != nil || pipes.stdoutRead != nil ||
+		t.Fatalf("pipes = %#v", pipes)
 	}
 }
 
@@ -448,6 +462,7 @@ func TestPrepareProcessClosesPipesAfterAllocationFailure(t *testing.T) {
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
+		Pipes:         ProcessPipeAll,
 	}
 	events := make(chan PrimitiveEvent, 1)
 	invocation := &ProcessInvocation{

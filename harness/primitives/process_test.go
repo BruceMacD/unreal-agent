@@ -14,6 +14,9 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
 )
 
+	request.Pipes = primitives.ProcessPipeAll
+}
+
 func TestProcessStreamsOutputAndExit(t *testing.T) {
 	stdout := strings.Repeat("stdout-", primitives.ProcessOutputChunkSize/4)
 	stderr := strings.Repeat("stderr-", primitives.ProcessOutputChunkSize/4)
@@ -30,6 +33,7 @@ func TestProcessStreamsOutputAndExit(t *testing.T) {
 			"PROCESS_STDERR=" + stderr,
 		},
 	}
+	events := collectEvents(startProcessWithAllPipes(t.Context(), request).Events())
 	if len(events) < 4 {
 		t.Fatalf("events = %#v", events)
 	}
@@ -86,6 +90,7 @@ func TestProcessStreamsOutputAndExit(t *testing.T) {
 }
 
 func TestProcessInput(t *testing.T) {
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/cat",
@@ -137,6 +142,7 @@ func TestFileReadComposesWithProcessInput(t *testing.T) {
 		t.Fatalf("write input file: %v", err)
 	}
 
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/cat",
@@ -201,6 +207,7 @@ func TestFileReadComposesWithProcessInput(t *testing.T) {
 
 func TestProcessSignalsRemainResponsiveDuringBlockedInputWrite(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "writer-started")
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -244,6 +251,7 @@ func TestProcessSignalsRemainResponsiveDuringBlockedInputWrite(t *testing.T) {
 
 func TestProcessCloseInterruptsBlockedInputWrite(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "writer-started")
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -284,6 +292,7 @@ func TestProcessCloseInterruptsBlockedInputWrite(t *testing.T) {
 }
 
 func TestProcessCloseInputEndsInput(t *testing.T) {
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/cat",
@@ -312,6 +321,7 @@ func TestProcessCloseInputEndsInput(t *testing.T) {
 
 func TestProcessInputRemainsClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -349,6 +359,7 @@ func TestProcessInputRemainsClosed(t *testing.T) {
 }
 
 func TestProcessSignal(t *testing.T) {
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -376,6 +387,7 @@ func TestProcessSignal(t *testing.T) {
 
 func TestProcessSignalPropagatesToChildren(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pid")
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -445,6 +457,7 @@ func TestProcessSignalDoesNotPropagateByDefault(t *testing.T) {
 
 func TestCancelProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -465,6 +478,7 @@ func TestCancelProcess(t *testing.T) {
 func TestCompletedProcessIsNotCanceledAfterCancellationStops(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pid")
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -491,6 +505,7 @@ func TestCancelProcessAllowsGracefulShutdown(t *testing.T) {
 	ready := filepath.Join(directory, "ready")
 	terminated := filepath.Join(directory, "terminated")
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -524,6 +539,7 @@ func TestCancelProcessAllowsGracefulShutdown(t *testing.T) {
 func TestBlockedInputWriteDefersCancellationUntilProcessStops(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "writer-started")
 	processContext, cancelProcess := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(processContext, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -560,6 +576,7 @@ func TestBlockedInputWriteDefersCancellationUntilProcessStops(t *testing.T) {
 func TestProcessDeadlineWhileOutputIsBackpressured(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -590,6 +607,7 @@ func TestProcessDeadlineWhileOutputIsBackpressured(t *testing.T) {
 func TestCancelProcessTerminatesDescendants(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pid")
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -616,11 +634,13 @@ func TestCancelProcessTerminatesDescendants(t *testing.T) {
 }
 
 func TestProcessesFromSameSourceAreIndependent(t *testing.T) {
+	first := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
 		Arguments:     []string{"-c", "printf first"},
 	})
+	second := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-2",
 		Path:          "/bin/sh",
@@ -631,6 +651,7 @@ func TestProcessesFromSameSourceAreIndependent(t *testing.T) {
 	assertCompletedProcessOutput(t, collectEvents(second.Events()), "operation-1", "process-2", "second")
 }
 
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -667,6 +688,7 @@ func TestProcessesFromSameSourceAreIndependent(t *testing.T) {
 
 func TestProcessDrainsBufferedOutputAfterExit(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pid")
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -749,6 +771,7 @@ func TestProcessExitInterruptsPendingInputWrite(t *testing.T) {
 	marker := filepath.Join(directory, "pid")
 	release := filepath.Join(directory, "release")
 	writeStarted := filepath.Join(directory, "write-started")
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -794,6 +817,7 @@ func TestProcessUsesDirectoryAndEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve temporary directory: %v", err)
 	}
+	events := collectEvents(startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -816,6 +840,7 @@ func TestProcessUsesDirectoryAndEnvironment(t *testing.T) {
 	}{
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			events := collectEvents(startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 				Source:        "operation-1",
 				CorrelationID: "process-1",
 				Environment:   test.environment,
@@ -826,12 +851,83 @@ func TestProcessUsesDirectoryAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestProcessSelectsParentPipes(t *testing.T) {
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/bin/sh",
+		Arguments: []string{
+			"-c",
+			"if read -r value; then printf 'stdin:%s' \"$value\"; else printf stdout; fi; printf stderr >&2",
+		},
+		Pipes: primitives.ProcessPipeStdout,
+	}).Events())
+	if len(events) != 3 || events[0].Type != primitives.PrimitiveEventProcessStarted ||
+		events[1].Type != primitives.PrimitiveEventProcessOutput ||
+		events[2].Type != primitives.PrimitiveEventProcessExited {
+		t.Fatalf("events = %#v", events)
+	}
+	output := eventResult[primitives.ProcessOutputResult](t, events[1])
+	if output.Stream != primitives.ProcessStdout || string(output.Data) != "stdout" {
+		t.Fatalf("output = %#v", output)
+	}
+}
+
+func TestProcessUsesNoParentPipesByDefault(t *testing.T) {
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/usr/bin/true",
+	}).Events())
+	if len(events) != 2 || events[0].Type != primitives.PrimitiveEventProcessStarted ||
+		events[1].Type != primitives.PrimitiveEventProcessExited {
+		t.Fatalf("events = %#v", events)
+	}
+	if result := eventResult[primitives.ProcessExitResult](t, events[1]); result.ExitCode != 0 {
+		t.Fatalf("exit = %#v", result)
+	}
+}
+
+func TestProcessWithoutStdinPipeClosesInputIdempotently(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/bin/sleep",
+		Arguments:     []string{"30"},
+		Pipes:         primitives.ProcessPipeStdout | primitives.ProcessPipeStderr,
+	})
+	events := process.Events()
+	if started := receiveProcessEvent(t, events); started.Type != primitives.PrimitiveEventProcessStarted {
+		t.Fatalf("started = %#v", started)
+	}
+	closed := singleEvent(t, collectEvents(process.CloseInput(t.Context(), primitives.ProcessCloseInputRequest{
+		Source:        "operation-1",
+		CorrelationID: "close-1",
+	})), primitives.PrimitiveEventProcessInputClosed)
+	if closed.Result != nil {
+		t.Fatalf("close result = %#v", closed.Result)
+	}
+	cancel()
+	singleEvent(t, collectEvents(events), primitives.PrimitiveEventCanceled)
+}
+
+func TestProcessRejectsInvalidPipeSelection(t *testing.T) {
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/bin/true",
+		Pipes:         primitives.ProcessPipeSet(1 << 7),
+	}).Events()), primitives.PrimitiveEventFailed)
+	failure := eventResult[primitives.PrimitiveFailureResult](t, event)
+	if !strings.Contains(failure.Error, "pipe selection") {
+		t.Fatalf("failure = %q", failure.Error)
+	}
+}
+
 func TestProcessRequiresAbsoluteExecutablePath(t *testing.T) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "requested-command")
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf unexpected"), 0o700); err != nil {
 		t.Fatalf("create executable: %v", err)
 	}
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "requested-command",
@@ -869,6 +965,7 @@ func TestProcessStartFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			event := singleEvent(
 				t,
+				collectEvents(startProcessWithAllPipes(t.Context(), test.request).Events()),
 				primitives.PrimitiveEventFailed,
 			)
 			failure := eventResult[primitives.PrimitiveFailureResult](t, event)
@@ -882,6 +979,7 @@ func TestProcessStartFailures(t *testing.T) {
 func TestStartProcessWithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -901,6 +999,7 @@ func TestStartProcessWithCanceledContext(t *testing.T) {
 }
 
 func TestProcessControlFailsAfterStartFailure(t *testing.T) {
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/missing/process/executable",
@@ -918,6 +1017,7 @@ func TestProcessControlFailsAfterStartFailure(t *testing.T) {
 
 func TestProcessControlsFailAfterExitWithUnreadEvents(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pid")
+	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -983,6 +1083,7 @@ func TestProcessControlsFailAfterExitWithUnreadEvents(t *testing.T) {
 
 func TestProcessSignalFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -1006,6 +1107,7 @@ func TestProcessSignalFailure(t *testing.T) {
 
 func TestProcessControlHonorsItsContext(t *testing.T) {
 	ctx, cancelProcess := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -1048,6 +1150,7 @@ func TestProcessControlHonorsItsContext(t *testing.T) {
 
 func TestProcessControlFailsAfterProcessCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",

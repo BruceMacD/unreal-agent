@@ -10,20 +10,25 @@ import (
 	"testing"
 )
 
+func TestCreateNewPathUsesCurrentDirectory(t *testing.T) {
 	t.Chdir(t.TempDir())
 
+		Kind: IOCreateRegularFile,
 		Path: "created",
 		Mode: IOCreateDefaultMode,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Kind != IOCreateRegularFile {
+		t.Fatalf("kind = %d, want regular file", result.Kind)
 	}
 	if _, err := os.Stat("created"); err != nil {
 		t.Fatal(err)
 	}
 }
 
+func TestCreateNewPathUsesRequestedMode(t *testing.T) {
 	mode := os.FileMode(0o600)
 	path := filepath.Join(t.TempDir(), "created")
 
@@ -51,7 +56,12 @@ func TestUnixFileMode(t *testing.T) {
 	}
 }
 
+func TestCreateNewPathRejectsNonUnixModeBits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "created")
+		Kind: IOCreateRegularFile,
+		Path: path,
+		Mode: os.ModeDir | 0o700,
+	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported mode bits") {
 		t.Fatalf("error = %v, want unsupported mode failure", err)
 	}
@@ -98,6 +108,25 @@ func TestOpenNewFileAtRejectsClosedDirectory(t *testing.T) {
 			t.Error(closeErr)
 		}
 		t.Fatal("creating relative to a closed directory succeeded")
+	}
+}
+
+func TestMakeNewDirectoryAtRejectsClosedDirectory(t *testing.T) {
+	parentPath := t.TempDir()
+	parent, err := openCreateDirectory(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = makeNewDirectoryAt(parent, "created", 0o700)
+	if err == nil {
+		t.Fatal("creating relative to a closed directory succeeded")
+	}
+	if _, statErr := os.Stat(filepath.Join(parentPath, "created")); !os.IsNotExist(statErr) {
+		t.Fatalf("stat rejected directory: %v, want not exist", statErr)
 	}
 }
 
@@ -151,6 +180,21 @@ func TestSyncCreatedFileReportsParentSyncFailure(t *testing.T) {
 	}
 }
 
+func TestSyncCreatedDirectoryReportsParentSyncFailure(t *testing.T) {
+	parent, err := openCreateDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = syncCreatedDirectory(parent)
+	if err == nil || !strings.Contains(err.Error(), "sync parent directory") {
+		t.Fatalf("error = %v, want parent-directory synchronization failure", err)
+	}
+}
+
 func TestPersistCreatedFileReportsSyncAndCloseFailures(t *testing.T) {
 	parentPath := t.TempDir()
 	parent, err := openCreateDirectory(parentPath)
@@ -167,6 +211,10 @@ func TestPersistCreatedFileReportsSyncAndCloseFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	_, err = persistCreatedFile(IOCreateRequest{
+		Kind: IOCreateRegularFile,
+		Path: path,
+	}, parentPath, file, parent)
 	if err == nil {
 		t.Fatal("persisting a closed file succeeded")
 	}

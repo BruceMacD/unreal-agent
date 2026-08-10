@@ -18,6 +18,13 @@ const (
 	IOReadChunkSize                 = 32 * 1024
 )
 
+type IOCreateKind uint8
+
+const (
+	IOCreateRegularFile IOCreateKind = iota + 1
+	IOCreateDirectory
+)
+
 type IOReadRequest struct {
 	Source        SourceID
 	CorrelationID CorrelationID
@@ -153,14 +160,18 @@ func ioReadCanceled(request IOReadRequest) PrimitiveEvent {
 type IOCreateRequest struct {
 	Source        SourceID
 	CorrelationID CorrelationID
+	Kind          IOCreateKind
 	Path          string
 }
 
 type IOCreateResult struct {
+	Kind IOCreateKind
 }
 
+	go createPath(ctx, request, events)
 }
 
+func createPath(ctx context.Context, request IOCreateRequest, events chan<- PrimitiveEvent) {
 	if ctx.Err() != nil {
 		events <- ioCreateCanceled(request)
 		return
