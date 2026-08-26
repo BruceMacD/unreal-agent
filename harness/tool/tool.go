@@ -20,6 +20,7 @@ type Translator interface {
 }
 
 type Definition struct {
+	Tool     llm.Tool
 }
 
 type Registry interface {
