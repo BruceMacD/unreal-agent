@@ -17,6 +17,158 @@ import (
 	request.Pipes = primitives.ProcessPipeAll
 }
 
+func TestProcessCapturesOutputIntoPaths(t *testing.T) {
+	directory := t.TempDir()
+	stdoutPath := filepath.Join(directory, "stdout")
+	stderrPath := filepath.Join(directory, "stderr")
+	for _, path := range []string{stdoutPath, stderrPath} {
+		if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	request := primitives.ProcessStartRequest{
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/bin/sh",
+		Arguments: []string{
+			"-c",
+			"printf captured-out; printf captured-err >&2; exit 7",
+		},
+		StdoutPath: stdoutPath,
+		StderrPath: stderrPath,
+	}
+	if len(events) != 2 ||
+		events[0].Type != primitives.PrimitiveEventProcessStarted ||
+		events[1].Type != primitives.PrimitiveEventProcessExited {
+		t.Fatalf("events = %#v", events)
+	}
+	if result := eventResult[primitives.ProcessExitResult](t, events[1]); result.ExitCode != 7 || result.Signal != 0 {
+		t.Fatalf("exit = %#v", result)
+	}
+	for path, want := range map[string]string{
+		stdoutPath: "captured-out",
+		stderrPath: "captured-err",
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(contents) != want {
+			t.Fatalf("contents of %q = %q, want %q", path, contents, want)
+		}
+	}
+}
+
+func TestProcessCancellationCompletesCapturedOutput(t *testing.T) {
+	directory := t.TempDir()
+	stdoutPath := filepath.Join(directory, "stdout")
+	stderrPath := filepath.Join(directory, "stderr")
+	for _, path := range []string{stdoutPath, stderrPath} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/bin/sh",
+		Arguments: []string{
+			"-c",
+			"trap 'printf final; printf error >&2; exit 0' TERM; printf ready; while :; do :; done",
+		},
+		StdoutPath: stdoutPath,
+		StderrPath: stderrPath,
+	})
+	events := process.Events()
+	if started := receiveProcessEvent(t, events); started.Type != primitives.PrimitiveEventProcessStarted {
+		t.Fatalf("started = %#v", started)
+	}
+	waitForFileContent(t, stdoutPath, "ready")
+
+	cancel()
+	singleEvent(t, collectEvents(events), primitives.PrimitiveEventCanceled)
+	for path, want := range map[string]string{
+		stdoutPath: "readyfinal",
+		stderrPath: "error",
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(contents) != want {
+			t.Fatalf("contents of %q = %q, want %q", path, contents, want)
+		}
+	}
+}
+
+func TestProcessRejectsInvalidCaptureConfiguration(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "capture")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, request := range []primitives.ProcessStartRequest{
+		{Path: "/bin/true", StdoutPath: "relative"},
+		{Path: "/bin/true", StderrPath: "relative"},
+		{Path: "/bin/true", Pipes: primitives.ProcessPipeStdout, StdoutPath: path},
+		{Path: "/bin/true", Pipes: primitives.ProcessPipeStderr, StderrPath: path},
+		{Path: "/bin/true", StdoutPath: path, StderrPath: path},
+	} {
+		event := singleEvent(
+			t,
+			primitives.PrimitiveEventFailed,
+		)
+		if failure := eventResult[primitives.PrimitiveFailureResult](t, event); failure.Error == "" {
+			t.Fatalf("failure = %#v", failure)
+		}
+	}
+}
+
+func TestProcessRejectsAliasedCapturePathsBeforeTruncating(t *testing.T) {
+	directory := t.TempDir()
+	stdoutPath := filepath.Join(directory, "stdout")
+	stderrPath := filepath.Join(directory, "stderr")
+	want := []byte("preserved")
+	if err := os.WriteFile(stdoutPath, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(stdoutPath, stderrPath); err != nil {
+		t.Fatal(err)
+	}
+
+	event := singleEvent(
+		t,
+			Path:       "/bin/true",
+			StdoutPath: stdoutPath,
+			StderrPath: stderrPath,
+		}).Events()),
+		primitives.PrimitiveEventFailed,
+	)
+	failure := eventResult[primitives.PrimitiveFailureResult](t, event)
+	if !strings.Contains(failure.Error, "same file") {
+		t.Fatalf("failure = %q, want aliased-capture failure", failure.Error)
+	}
+	contents, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != string(want) {
+		t.Fatalf("contents = %q, want %q", contents, want)
+	}
+}
+
+func TestProcessRejectsInvalidCapturePath(t *testing.T) {
+		Path:       "/bin/true",
+		StdoutPath: t.TempDir(),
+	}).Events())
+	event := singleEvent(t, events, primitives.PrimitiveEventFailed)
+	if failure := eventResult[primitives.PrimitiveFailureResult](t, event); failure.Error == "" {
+		t.Fatalf("failure = %#v", failure)
+	}
+}
+
 func TestProcessStreamsOutputAndExit(t *testing.T) {
 	stdout := strings.Repeat("stdout-", primitives.ProcessOutputChunkSize/4)
 	stderr := strings.Repeat("stderr-", primitives.ProcessOutputChunkSize/4)
@@ -424,11 +576,14 @@ func TestProcessSignalDoesNotPropagateByDefault(t *testing.T) {
 	directory := t.TempDir()
 	pidMarker := filepath.Join(directory, "pid")
 	aliveMarker := filepath.Join(directory, "alive")
+	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcessWithAllPipes(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
 		Arguments: []string{
 			"-c",
+			`trap ':' TERM; /bin/sh -c "$3" sh "$1" "$2" & while :; do wait; done`,
 			"sh",
 			pidMarker,
 			aliveMarker,
@@ -453,6 +608,9 @@ func TestProcessSignalDoesNotPropagateByDefault(t *testing.T) {
 	waitForFileContent(t, aliveMarker, "alive\n")
 	waitForProcessGone(t, descendantPID)
 	descendantGone()
+
+	cancel()
+	singleEvent(t, collectEvents(events), primitives.PrimitiveEventCanceled)
 }
 
 func TestCancelProcess(t *testing.T) {
@@ -651,6 +809,7 @@ func TestProcessesFromSameSourceAreIndependent(t *testing.T) {
 	assertCompletedProcessOutput(t, collectEvents(second.Events()), "operation-1", "process-2", "second")
 }
 
+func TestProcessExitTerminatesDescendantsWithoutWaitingForInheritedOutputPipes(t *testing.T) {
 	process := startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
@@ -683,6 +842,9 @@ func TestProcessesFromSameSourceAreIndependent(t *testing.T) {
 		t.Fatalf("descendant PID = %d", descendantPID)
 	}
 	descendantGone := cleanupProcessPID(t, descendantPID)
+	if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("inspect descendant after process exit: %v, want ESRCH", err)
+	}
 	descendantGone()
 }
 

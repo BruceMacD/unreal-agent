@@ -3,6 +3,7 @@
 package primitives
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 func TestCreateNewPathUsesCurrentDirectory(t *testing.T) {
 	t.Chdir(t.TempDir())
 
+	result, err := createNewPath(t.Context(), IOCreateRequest{
 		Kind: IOCreateRegularFile,
 		Path: "created",
 		Mode: IOCreateDefaultMode,
@@ -32,6 +34,7 @@ func TestCreateNewPathUsesRequestedMode(t *testing.T) {
 	mode := os.FileMode(0o600)
 	path := filepath.Join(t.TempDir(), "created")
 
+	_, err := createNewPath(t.Context(), IOCreateRequest{Kind: IOCreateRegularFile, Path: path, Mode: mode})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +44,64 @@ func TestCreateNewPathUsesRequestedMode(t *testing.T) {
 	}
 	if info.Mode().Perm() != mode {
 		t.Fatalf("mode = %o, want %o", info.Mode().Perm(), mode)
+	}
+}
+
+	parentPath := t.TempDir()
+	parent, err := openCreateDirectory(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := IOCreateRequest{
+		Kind: IOCreateRegularFile,
+		Mode: 0o600,
+	}
+	}
+	}
+	}
+}
+
+func TestCreateOrUsePathHonorsCancellationBeforeMutation(t *testing.T) {
+	parentPath := t.TempDir()
+	parent, err := openCreateDirectory(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := IOCreateRequest{
+		Kind: IOCreateRegularFile,
+		Path: filepath.Join(parentPath, "created"),
+		Mode: 0o600,
+	}
+	mode, err := unixFileMode(request.Mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = createOrUsePath(ctx, request, "created", parentPath, parent, mode)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+	if _, err := os.Stat(request.Path); !os.IsNotExist(err) {
+		t.Fatalf("stat canceled path: %v, want not exist", err)
+	}
+}
+
+func TestCreateOrUsePathPreservesCloseFailureDuringCancellation(t *testing.T) {
+	parentPath := t.TempDir()
+	parent, err := openCreateDirectory(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err = createOrUsePath(ctx, IOCreateRequest{}, "created", parentPath, parent, 0o600)
+	if !errors.Is(err, context.Canceled) || isOnlyContextCancellation(err) {
+		t.Fatalf("error = %v, want cancellation joined with close failure", err)
 	}
 }
 
@@ -58,6 +119,7 @@ func TestUnixFileMode(t *testing.T) {
 
 func TestCreateNewPathRejectsNonUnixModeBits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "created")
+	_, err := createNewPath(t.Context(), IOCreateRequest{
 		Kind: IOCreateRegularFile,
 		Path: path,
 		Mode: os.ModeDir | 0o700,

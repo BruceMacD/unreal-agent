@@ -3,6 +3,7 @@
 package primitives
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const maxCreateContentionRetries = 16
+
+func createNewPath(ctx context.Context, request IOCreateRequest) (IOCreateResult, error) {
 	if request.Kind != IOCreateRegularFile && request.Kind != IOCreateDirectory {
 		return IOCreateResult{}, fmt.Errorf("create %q: unsupported kind %d", request.Path, request.Kind)
 	}
@@ -32,16 +36,102 @@ import (
 	if err != nil {
 		return IOCreateResult{}, fmt.Errorf("open parent directory %q: %w", parentPath, err)
 	}
+	return createOrUsePath(ctx, request, name, parentPath, parent, mode)
+}
 
+func createOrUsePath(
+	ctx context.Context,
+	request IOCreateRequest,
+	name string,
+	parentPath string,
+	parent *os.File,
+	mode uint32,
+) (IOCreateResult, error) {
+	for retries := 0; ; {
+		if err := ctx.Err(); err != nil {
 			return IOCreateResult{}, errors.Join(
+				err,
 				closeFile("parent directory", parentPath, parent),
 			)
 		}
-	}
+		if request.Kind == IOCreateRegularFile {
+			file, err := openNewFileAt(parent, name, mode)
+			if err == nil {
+				return persistCreatedFile(request, parentPath, file, parent)
+			}
+			if !errors.Is(err, os.ErrExist) {
+				return IOCreateResult{}, errors.Join(
+					fmt.Errorf("create %q: %w", request.Path, err),
+					closeFile("parent directory", parentPath, parent),
+				)
+			}
+		} else {
+			err := makeNewDirectoryAt(parent, name, mode)
+			if err == nil {
+				return persistCreatedEntry(request, parentPath, parent)
+			}
+			if !errors.Is(err, os.ErrExist) {
+				return IOCreateResult{}, errors.Join(
+					fmt.Errorf("create %q: %w", request.Path, err),
+					closeFile("parent directory", parentPath, parent),
+				)
+			}
+		}
 
+		result, retry, err := useExistingPath(request, name, parentPath, parent)
+		if !retry {
+			return result, err
+		}
+		if retries == maxCreateContentionRetries {
+			return IOCreateResult{}, errors.Join(
+				fmt.Errorf(
+					"create %q: path remained unstable after %d retries",
+					request.Path,
+					maxCreateContentionRetries,
+				),
+				closeFile("parent directory", parentPath, parent),
+			)
+		}
+		retries++
+	}
+}
+
+func useExistingPath(
+	request IOCreateRequest,
+	name string,
+	parentPath string,
+	parent *os.File,
+) (IOCreateResult, bool, error) {
+	var stat unix.Stat_t
+	if err := retryEINTR(func() error {
+		return unix.Fstatat(int(parent.Fd()), name, &stat, unix.AT_SYMLINK_NOFOLLOW)
+	}); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return IOCreateResult{}, true, nil
+		}
+		return IOCreateResult{}, false, errors.Join(
+			fmt.Errorf("inspect existing %q: %w", request.Path, err),
 			closeFile("parent directory", parentPath, parent),
 		)
 	}
+	if err := validateExistingPath(request, uint32(stat.Mode)); err != nil {
+		return IOCreateResult{}, false, errors.Join(
+			fmt.Errorf("use existing %q: %w", request.Path, err),
+			closeFile("parent directory", parentPath, parent),
+		)
+	}
+	result, err := persistCreatedEntry(request, parentPath, parent)
+	return result, false, err
+}
+
+func validateExistingPath(request IOCreateRequest, mode uint32) error {
+	if request.Kind == IOCreateRegularFile && mode&unix.S_IFMT != unix.S_IFREG {
+		return errors.New("existing path is not a regular file")
+	}
+	if request.Kind == IOCreateDirectory && mode&unix.S_IFMT != unix.S_IFDIR {
+		return errors.New("existing path is not a directory")
+	}
+	return nil
 }
 
 func trimTrailingPathSeparators(path string) string {
@@ -75,6 +165,7 @@ func persistCreatedFile(
 	return IOCreateResult{Kind: request.Kind}, nil
 }
 
+func persistCreatedEntry(
 	request IOCreateRequest,
 	parentPath string,
 	parent *os.File,

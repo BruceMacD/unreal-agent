@@ -2,6 +2,8 @@
 package operation
 
 import (
+
+	"github.com/unreallabsai/unreal-agent/harness/primitives"
 )
 
 type Type string
@@ -25,6 +27,15 @@ type Spec struct {
 }
 
 type Operation struct {
+}
+
+type PrimitiveDispatch struct {
+	Type primitives.PrimitiveDispatchType
+	Data any
+}
+
+type Step struct {
+	Dispatches []PrimitiveDispatch
 }
 
 type Manager interface {

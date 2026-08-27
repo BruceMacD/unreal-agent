@@ -162,6 +162,8 @@ type IOCreateRequest struct {
 	CorrelationID CorrelationID
 	Kind          IOCreateKind
 	Path          string
+	// Mode is used only when creating a new entry and is subject to umask.
+	Mode os.FileMode
 }
 
 type IOCreateResult struct {
@@ -177,7 +179,12 @@ func createPath(ctx context.Context, request IOCreateRequest, events chan<- Prim
 		return
 	}
 
+	result, err := createNewPath(ctx, request)
 	if err != nil {
+		if isOnlyContextCancellation(err) {
+			events <- ioCreateCanceled(request)
+			return
+		}
 		events <- ioCreateFailure(request, err)
 		return
 	}

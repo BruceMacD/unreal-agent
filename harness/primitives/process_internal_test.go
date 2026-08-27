@@ -399,7 +399,85 @@ func TestPrepareProcessUsesNoPipesForZeroSelection(t *testing.T) {
 		t.Fatalf("stdio = (%#v, %#v, %#v)", command.Stdin, command.Stdout, command.Stderr)
 	}
 	if pipes.stdinRead != nil || pipes.stdinWrite != nil || pipes.stdoutRead != nil ||
+		pipes.stdoutWrite != nil || pipes.stdoutCapture != nil || pipes.stderrRead != nil ||
+		pipes.stderrWrite != nil || pipes.stderrCapture != nil {
 		t.Fatalf("pipes = %#v", pipes)
+	}
+}
+
+func TestProcessCaptureDescriptorsRemainOpenUntilWaitAndSync(t *testing.T) {
+	directory := t.TempDir()
+	stdoutPath := filepath.Join(directory, "stdout")
+	stderrPath := filepath.Join(directory, "stderr")
+	for _, path := range []string{stdoutPath, stderrPath} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command, pipes, err := prepareProcess(ProcessStartRequest{
+		Path:       "/bin/sh",
+		Arguments:  []string{"-c", "printf output; printf error >&2"},
+		StdoutPath: stdoutPath,
+		StderrPath: stderrPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := false
+	waited := false
+	t.Cleanup(func() {
+		if started && !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		if err := pipes.closeAll(); err != nil {
+			t.Error(err)
+		}
+	})
+	parent := pipes.parent()
+	if parent.stdoutCapture == nil || parent.stderrCapture == nil ||
+		pipes.stdoutWrite != nil || pipes.stderrWrite != nil {
+		t.Fatalf("capture descriptors = %#v", parent)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	started = true
+	if err := pipes.closeChildEnds(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	waited = true
+	if err := parent.syncCaptures(); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.closeCaptures(); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{stdoutPath: "output", stderrPath: "error"} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(contents) != want {
+			t.Fatalf("contents of %q = %q, want %q", path, contents, want)
+		}
+	}
+}
+
+func TestSyncProcessCaptureReportsClosedDescriptor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncProcessCapture(file, "stdout"); err == nil || !strings.Contains(err.Error(), "sync process stdout capture") {
+		t.Fatalf("sync error = %v", err)
 	}
 }
 
@@ -490,6 +568,7 @@ func TestPrepareProcessClosesPipesAfterAllocationFailure(t *testing.T) {
 	}
 }
 
+func TestProcessLifecycleHelpers(t *testing.T) {
 	if err := closeProcessFile(nil); err != nil {
 		t.Fatalf("close nil file: %v", err)
 	}
@@ -608,6 +687,92 @@ func TestTerminateProcessEscalatesAfterGracePeriod(t *testing.T) {
 	var exitErr *exec.ExitError
 	if !errors.As(waitErr, &exitErr) || exitErr.ProcessState.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
 		t.Fatalf("wait error = %v, want SIGKILL", waitErr)
+	}
+}
+
+func TestTerminateProcessDoesNotRequireKilledProcessToBeReaped(t *testing.T) {
+	command := exec.Command("/bin/sh", "-c", "exec sleep 30")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := false
+	t.Cleanup(func() {
+		if reaped {
+			return
+		}
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	})
+
+	if err := terminateProcess(command.Process, processParentPipes{}, 0); err != nil {
+		t.Fatalf("terminate unreaped process: %v", err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("process exited without a signal")
+	}
+	reaped = true
+}
+
+func TestAwaitProcessCompletionCleansDescendantsAfterLeaderExit(t *testing.T) {
+	command := exec.Command("/bin/sh", "-c", "sleep 30 &")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	processGroup := command.Process.Pid
+	exists, err := processGroupExists(processGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("background descendant exited before the test")
+	}
+	cleaned := false
+	t.Cleanup(func() {
+		if cleaned {
+			return
+		}
+		if err := syscall.Kill(-processGroup, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("kill process group: %v", err)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	waitCompleted := make(chan error)
+	type completion struct {
+		waitErr  error
+		canceled bool
+		err      error
+	}
+	completed := make(chan completion, 1)
+	go func() {
+		waitErr, canceled, err := awaitProcessCompletion(
+			ctx,
+			command.Process,
+			processParentPipes{},
+			waitCompleted,
+			time.Second,
+		)
+		completed <- completion{waitErr: waitErr, canceled: canceled, err: err}
+	}()
+
+	exited, err := waitForProcessInvocation(command.Process, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exited {
+		t.Fatal("process group still exists after completion cleanup")
+	}
+	cleaned = true
+	waitCompleted <- nil
+	result := <-completed
+	if result.waitErr != nil || result.canceled || result.err != nil {
+		t.Fatalf("completion = (%v, %t, %v)", result.waitErr, result.canceled, result.err)
 	}
 }
 

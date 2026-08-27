@@ -36,11 +36,16 @@ var errProcessDone = errors.New("process invocation is done")
 type ProcessStartRequest struct {
 	Source        SourceID
 	CorrelationID CorrelationID
+	// Path must be absolute.
 	Path        string
 	Arguments   []string
 	Directory   string
 	Environment []string
 	Pipes       ProcessPipeSet
+	// Output capture paths must be absolute, name existing regular files, and
+	// are truncated before start. Each is mutually exclusive with its pipe.
+	StdoutPath string
+	StderrPath string
 }
 
 type ProcessPipeSet uint8
@@ -379,11 +384,15 @@ func runProcess(
 		})
 	}
 
+	waitErr, canceled, completionErr := awaitProcessCompletion(
 		ctx,
 		command.Process,
 		parentPipes,
 		waitCompleted,
+		processTerminationGracePeriod,
 	)
+	captureSyncErr := parentPipes.syncCaptures()
+	captureCloseErr := parentPipes.closeCaptures()
 	stdinCloseErr := closeProcessFile(parentPipes.stdin)
 	outputFinishErr := error(nil)
 	if !canceled {
@@ -396,9 +405,12 @@ func runProcess(
 		_, waitCompletionErr := processResult(command, waitErr)
 		shutdownErr := errors.Join(
 			childPipeCloseErr,
+			captureSyncErr,
+			captureCloseErr,
 			stdinCloseErr,
 			outputFinishErr,
 			outputCloseErr,
+			completionErr,
 			waitCompletionErr,
 		)
 		sendProcessTerminalEvent(
@@ -415,9 +427,12 @@ func runProcess(
 	exitResult, exitErr := processResult(command, waitErr)
 	terminalErr := errors.Join(
 		childPipeCloseErr,
+		captureSyncErr,
+		captureCloseErr,
 		stdinCloseErr,
 		outputFinishErr,
 		outputCloseErr,
+		completionErr,
 		exitErr,
 	)
 	sendProcessTerminalEvent(
@@ -440,15 +455,28 @@ func awaitProcessCompletion(
 	process *os.Process,
 	pipes processParentPipes,
 	waitCompleted <-chan error,
+	gracePeriod time.Duration,
 ) (error, bool, error) {
 	select {
 	case waitErr := <-waitCompleted:
+		return waitErr, false, terminateProcess(
+			process,
+			processParentPipes{},
+			gracePeriod,
+		)
 	case <-ctx.Done():
 		if processWaitCompleted(process) {
+			completionErr := terminateProcess(
+				process,
+				processParentPipes{},
+				gracePeriod,
+			)
+			return <-waitCompleted, false, completionErr
 		}
 		cancellationErr := terminateProcess(
 			process,
 			pipes,
+			gracePeriod,
 		)
 		return <-waitCompleted, true, cancellationErr
 	}
@@ -463,13 +491,28 @@ func processWaitCompleted(process *os.Process) bool {
 }
 
 type processPipes struct {
+	stdinRead     *os.File
+	stdinWrite    *os.File
+	stdoutRead    *os.File
+	stdoutWrite   *os.File
+	stdoutCapture *os.File
+	stderrRead    *os.File
+	stderrWrite   *os.File
+	stderrCapture *os.File
 }
 
 type processParentPipes struct {
+	stdin         *os.File
+	stdout        *os.File
+	stderr        *os.File
+	stdoutCapture *os.File
+	stderrCapture *os.File
 }
 
 func prepareProcess(request ProcessStartRequest) (*exec.Cmd, processPipes, error) {
 	var pipes processPipes
+	var stdoutCaptureInfo os.FileInfo
+	var stderrCaptureInfo os.FileInfo
 	if request.Pipes&ProcessPipeStdin != 0 {
 		stdinRead, stdinWrite, err := os.Pipe()
 		if err != nil {
@@ -489,6 +532,16 @@ func prepareProcess(request ProcessStartRequest) (*exec.Cmd, processPipes, error
 		}
 		pipes.stdoutRead = stdoutRead
 		pipes.stdoutWrite = stdoutWrite
+	} else if request.StdoutPath != "" {
+		stdout, info, err := openProcessCapture(request.StdoutPath, "stdout")
+		if err != nil {
+			return nil, pipes, errors.Join(
+				fmt.Errorf("start process %q: %w", request.Path, err),
+				pipes.closeAll(),
+			)
+		}
+		pipes.stdoutCapture = stdout
+		stdoutCaptureInfo = info
 	}
 
 	if request.Pipes&ProcessPipeStderr != 0 {
@@ -501,6 +554,39 @@ func prepareProcess(request ProcessStartRequest) (*exec.Cmd, processPipes, error
 		}
 		pipes.stderrRead = stderrRead
 		pipes.stderrWrite = stderrWrite
+	} else if request.StderrPath != "" {
+		stderr, info, err := openProcessCapture(request.StderrPath, "stderr")
+		if err != nil {
+			return nil, pipes, errors.Join(
+				fmt.Errorf("start process %q: %w", request.Path, err),
+				pipes.closeAll(),
+			)
+		}
+		pipes.stderrCapture = stderr
+		stderrCaptureInfo = info
+	}
+
+	if stdoutCaptureInfo != nil && stderrCaptureInfo != nil &&
+		os.SameFile(stdoutCaptureInfo, stderrCaptureInfo) {
+		return nil, pipes, errors.Join(
+			fmt.Errorf("start process %q: stdout and stderr capture paths identify the same file", request.Path),
+			pipes.closeAll(),
+		)
+	}
+	for _, capture := range []struct {
+		file   *os.File
+		path   string
+		stream string
+	}{
+		{file: pipes.stdoutCapture, path: request.StdoutPath, stream: "stdout"},
+		{file: pipes.stderrCapture, path: request.StderrPath, stream: "stderr"},
+	} {
+		if err := truncateProcessCapture(capture.file, capture.path, capture.stream); err != nil {
+			return nil, pipes, errors.Join(
+				fmt.Errorf("start process %q: %w", request.Path, err),
+				pipes.closeAll(),
+			)
+		}
 	}
 
 	command := exec.Command(request.Path, request.Arguments...)
@@ -512,15 +598,75 @@ func prepareProcess(request ProcessStartRequest) (*exec.Cmd, processPipes, error
 	}
 	if pipes.stdoutWrite != nil {
 		command.Stdout = pipes.stdoutWrite
+	} else if pipes.stdoutCapture != nil {
+		command.Stdout = pipes.stdoutCapture
 	}
 	if pipes.stderrWrite != nil {
 		command.Stderr = pipes.stderrWrite
+	} else if pipes.stderrCapture != nil {
+		command.Stderr = pipes.stderrCapture
 	}
 	return command, pipes, nil
 }
 
+func openProcessCapture(path string, stream string) (*os.File, os.FileInfo, error) {
+	var descriptor int
+	err := retryEINTR(func() error {
+		var openErr error
+		descriptor, openErr = unix.Open(
+			path,
+			unix.O_WRONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+			0,
+		)
+		return openErr
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("open process %s capture %q: %w", stream, path, err)
+	}
+
+	file := os.NewFile(uintptr(descriptor), path)
+	info, err := file.Stat()
+	if err != nil {
+		return nil, nil, errors.Join(
+			fmt.Errorf("inspect process %s capture %q: %w", stream, path, err),
+			closeProcessFile(file),
+		)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, errors.Join(
+			fmt.Errorf("open process %s capture %q: path is not a regular file", stream, path),
+			closeProcessFile(file),
+		)
+	}
+	if err := unix.SetNonblock(descriptor, false); err != nil {
+		return nil, nil, errors.Join(
+			fmt.Errorf("open process %s capture %q: set blocking: %w", stream, path, err),
+			closeProcessFile(file),
+		)
+	}
+	return file, info, nil
+}
+
+func truncateProcessCapture(file *os.File, path string, stream string) error {
+	if file == nil {
+		return nil
+	}
+	if err := retryEINTR(func() error { return unix.Ftruncate(int(file.Fd()), 0) }); err != nil {
+		return errors.Join(
+			fmt.Errorf("truncate process %s capture %q: %w", stream, path, err),
+			closeProcessFile(file),
+		)
+	}
+	return nil
+}
+
 func (pipes processPipes) parent() processParentPipes {
 	return processParentPipes{
+		stdin:         pipes.stdinWrite,
+		stdout:        pipes.stdoutRead,
+		stderr:        pipes.stderrRead,
+		stdoutCapture: pipes.stdoutCapture,
+		stderrCapture: pipes.stderrCapture,
 	}
 }
 
@@ -538,8 +684,10 @@ func (pipes processPipes) closeAll() error {
 		closeProcessFile(pipes.stdinWrite),
 		closeProcessFile(pipes.stdoutRead),
 		closeProcessFile(pipes.stdoutWrite),
+		closeProcessFile(pipes.stdoutCapture),
 		closeProcessFile(pipes.stderrRead),
 		closeProcessFile(pipes.stderrWrite),
+		closeProcessFile(pipes.stderrCapture),
 	)
 }
 
@@ -548,6 +696,30 @@ func (pipes processParentPipes) closeAll() error {
 		closeProcessFile(pipes.stdin),
 		closeProcessFile(pipes.stdout),
 		closeProcessFile(pipes.stderr),
+	)
+}
+
+func (pipes processParentPipes) syncCaptures() error {
+	return errors.Join(
+		syncProcessCapture(pipes.stdoutCapture, "stdout"),
+		syncProcessCapture(pipes.stderrCapture, "stderr"),
+	)
+}
+
+func syncProcessCapture(file *os.File, stream string) error {
+	if file == nil {
+		return nil
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync process %s capture: %w", stream, err)
+	}
+	return nil
+}
+
+func (pipes processParentPipes) closeCaptures() error {
+	return errors.Join(
+		closeProcessFile(pipes.stdoutCapture),
+		closeProcessFile(pipes.stderrCapture),
 	)
 }
 
@@ -582,6 +754,9 @@ func terminateProcess(
 ) error {
 	termErr := signalProcessInvocation(process, syscall.SIGTERM)
 	exited, waitErr := waitForProcessInvocation(process, gracePeriod)
+	if exited && errors.Is(termErr, syscall.EPERM) {
+		termErr = nil
+	}
 	var killErr error
 	if !exited {
 		killErr = signalProcessInvocation(process, syscall.SIGKILL)
@@ -798,6 +973,28 @@ func validateProcessStartRequest(request ProcessStartRequest) error {
 	}
 	if request.Pipes&^ProcessPipeAll != 0 {
 		return fmt.Errorf("start process: unsupported pipe selection %#x", request.Pipes)
+	}
+	for _, output := range []struct {
+		name string
+		path string
+		pipe ProcessPipeSet
+	}{
+		{name: "stdout", path: request.StdoutPath, pipe: ProcessPipeStdout},
+		{name: "stderr", path: request.StderrPath, pipe: ProcessPipeStderr},
+	} {
+		if output.path == "" {
+			continue
+		}
+		if !filepath.IsAbs(output.path) {
+			return fmt.Errorf("start process: %s capture path must be absolute", output.name)
+		}
+		if request.Pipes&output.pipe != 0 {
+			return fmt.Errorf("start process: %s cannot use both a pipe and a capture path", output.name)
+		}
+	}
+	if request.StdoutPath != "" && request.StderrPath != "" &&
+		filepath.Clean(request.StdoutPath) == filepath.Clean(request.StderrPath) {
+		return errors.New("start process: stdout and stderr capture paths must differ")
 	}
 	return nil
 }

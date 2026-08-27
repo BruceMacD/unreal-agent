@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -73,7 +75,14 @@ func TestCreateFileUsesRequestedMode(t *testing.T) {
 	}
 }
 
+func TestCreateFileWithZeroModeIsReplayable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "created")
+	request := primitives.IOCreateRequest{Kind: primitives.IOCreateRegularFile, Path: path}
+	for range 2 {
+		singleEvent(
+			t,
+			primitives.PrimitiveEventIOCreateCompleted,
+		)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -118,10 +127,13 @@ func TestCreateDirectoryCreatesEmptyDirectory(t *testing.T) {
 	}
 }
 
+func TestCreateDirectoryAcceptsTrailingSeparator(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "created")
 	event := singleEvent(
 		t,
 			Kind: primitives.IOCreateDirectory,
+			Path: path + string(os.PathSeparator),
+			Mode: 0o700,
 		})),
 		primitives.PrimitiveEventIOCreateCompleted,
 	)
@@ -132,15 +144,106 @@ func TestCreateDirectoryCreatesEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !info.IsDir() {
+		t.Fatalf("created mode = %v, want directory", info.Mode())
 	}
 }
 
+func TestCreateDirectoryWithZeroModeIsReplayable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "created")
+	request := primitives.IOCreateRequest{Kind: primitives.IOCreateDirectory, Path: path}
+	for range 2 {
+		singleEvent(
+			t,
+			primitives.PrimitiveEventIOCreateCompleted,
+		)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !info.IsDir() || info.Mode().Perm() != 0 {
+		t.Fatalf("created mode = %v, want directory mode 0", info.Mode())
+	}
+}
+
+func TestCreateUsesProcessUmask(t *testing.T) {
+	parent := t.TempDir()
+	oldUmask := syscall.Umask(0o027)
+	defer syscall.Umask(oldUmask)
+
+	for _, test := range []struct {
+		request primitives.IOCreateRequest
+		want    os.FileMode
+	}{
+		{
+			request: primitives.IOCreateRequest{
+				Kind: primitives.IOCreateRegularFile,
+				Path: filepath.Join(parent, "file"),
+				Mode: 0o666,
+			},
+			want: 0o640,
+		},
+		{
+			request: primitives.IOCreateRequest{
+				Kind: primitives.IOCreateDirectory,
+				Path: filepath.Join(parent, "directory"),
+				Mode: 0o777,
+			},
+			want: 0o750,
+		},
+	} {
+		for range 2 {
+			singleEvent(
+				t,
+				primitives.PrimitiveEventIOCreateCompleted,
+			)
+		}
+		info, err := os.Stat(test.request.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != test.want {
+			t.Fatalf("mode of %q = %o, want %o", test.request.Path, info.Mode().Perm(), test.want)
+		}
+	}
+}
+
+func TestCreateAcceptsExistingPathWithRestrictiveModeWithoutChangingIt(t *testing.T) {
+	parent := t.TempDir()
+	file := filepath.Join(parent, "file")
+	if err := os.WriteFile(file, nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(parent, "directory")
+	if err := os.Mkdir(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(file, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		request primitives.IOCreateRequest
+		want    os.FileMode
+	}{
+		{request: primitives.IOCreateRequest{Kind: primitives.IOCreateRegularFile, Path: file, Mode: 0o600}, want: 0o400},
+		{request: primitives.IOCreateRequest{Kind: primitives.IOCreateDirectory, Path: directory, Mode: 0o700}, want: 0o500},
+	} {
+		singleEvent(
+			t,
+			primitives.PrimitiveEventIOCreateCompleted,
+		)
+		info, err := os.Stat(test.request.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != test.want {
+			t.Fatalf("mode of %q = %o, want unchanged %o", test.request.Path, info.Mode().Perm(), test.want)
+		}
 	}
 }
 
@@ -179,13 +282,21 @@ func TestCreateRejectsUnsupportedKind(t *testing.T) {
 	}
 }
 
+func TestCreateFilePreservesExistingFile(t *testing.T) {
 	existing := []byte("existing contents")
 	path := writeTestFile(t, existing)
 	request := primitives.IOCreateRequest{
 		Kind: primitives.IOCreateRegularFile,
 		Path: path,
+		Mode: 0o600,
 	}
 
+	event := singleEvent(
+		t,
+		primitives.PrimitiveEventIOCreateCompleted,
+	)
+	if result := eventResult[primitives.IOCreateResult](t, event); result.Kind != request.Kind {
+		t.Fatalf("result = %#v", result)
 	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -194,6 +305,128 @@ func TestCreateRejectsUnsupportedKind(t *testing.T) {
 	if !bytes.Equal(contents, existing) {
 		t.Fatalf("contents = %q, want %q", contents, existing)
 	}
+}
+
+func TestCreateDirectoryAllowsExistingDirectory(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := primitives.IOCreateRequest{Kind: primitives.IOCreateDirectory, Path: directory, Mode: 0o700}
+	event := singleEvent(
+		t,
+		primitives.PrimitiveEventIOCreateCompleted,
+	)
+	if result := eventResult[primitives.IOCreateResult](t, event); result.Kind != request.Kind {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestCreateDirectoryConcurrentCallsAreIdempotent(t *testing.T) {
+	const invocationCount = 16
+	path := filepath.Join(t.TempDir(), "created")
+	request := primitives.IOCreateRequest{
+		Kind: primitives.IOCreateDirectory,
+		Path: path,
+		Mode: 0o700,
+	}
+	ctx := t.Context()
+	start := make(chan struct{})
+	results := make(chan []primitives.PrimitiveEvent, invocationCount)
+	for range invocationCount {
+		go func() {
+			<-start
+		}()
+	}
+	close(start)
+
+	for range invocationCount {
+		event := singleEvent(t, <-results, primitives.PrimitiveEventIOCreateCompleted)
+		if result := eventResult[primitives.IOCreateResult](t, event); result.Kind != primitives.IOCreateDirectory {
+			t.Fatalf("result = %#v", result)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("created mode = %v, want directory", info.Mode())
+	}
+}
+
+func TestCreateAcceptsExistingPathWithBroaderModeWithoutChangingIt(t *testing.T) {
+	file := writeTestFile(t, nil)
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		request primitives.IOCreateRequest
+		want    os.FileMode
+	}{
+		{request: primitives.IOCreateRequest{Kind: primitives.IOCreateRegularFile, Path: file, Mode: 0o600}, want: 0o644},
+		{request: primitives.IOCreateRequest{Kind: primitives.IOCreateDirectory, Path: directory, Mode: 0o700}, want: 0o755},
+	} {
+		singleEvent(
+			t,
+			primitives.PrimitiveEventIOCreateCompleted,
+		)
+		info, err := os.Stat(test.request.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != test.want {
+			t.Fatalf("mode of %q = %o, want unchanged %o", test.request.Path, info.Mode().Perm(), test.want)
+		}
+	}
+}
+
+func TestCreateRejectsExistingPathOfWrongKind(t *testing.T) {
+	for _, test := range []struct {
+		request primitives.IOCreateRequest
+		want    string
+	}{
+		{
+			request: primitives.IOCreateRequest{Kind: primitives.IOCreateDirectory, Path: writeTestFile(t, nil), Mode: 0o700},
+			want:    "not a directory",
+		},
+		{
+			request: primitives.IOCreateRequest{Kind: primitives.IOCreateRegularFile, Path: t.TempDir(), Mode: 0o600},
+			want:    "not a regular file",
+		},
+	} {
+		event := singleEvent(
+			t,
+			primitives.PrimitiveEventFailed,
+		)
+		if failure := eventResult[primitives.PrimitiveFailureResult](t, event); !strings.Contains(failure.Error, test.want) {
+			t.Fatalf("failure = %q, want %q", failure.Error, test.want)
+		}
+	}
+}
+
+func TestCreateRejectsExistingSymlink(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "link")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	singleEvent(
+		t,
+			Kind: primitives.IOCreateRegularFile,
+			Path: path,
+			Mode: 0o600,
+		})),
+		primitives.PrimitiveEventFailed,
+	)
 }
 
 func TestCreateFileCanceledBeforeStart(t *testing.T) {
@@ -220,6 +453,7 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 		CorrelationID: "create-1",
 		Kind:          primitives.IOCreateRegularFile,
 		Path:          path,
+		Mode:          primitives.IOCreateDefaultMode,
 	}
 
 	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventFailed {
@@ -234,6 +468,7 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 	}
 }
 
+func TestCreateFileConcurrentProcessesAreIdempotent(t *testing.T) {
 	const processCount = 6
 	directory := t.TempDir()
 	path := filepath.Join(directory, "created")
@@ -308,7 +543,11 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 			failureCount++
 		}
 	}
+	if completedCount != processCount {
+		t.Fatalf("completed results = %d, want %d", completedCount, processCount)
 	}
+	if failureCount != 0 {
+		t.Fatalf("failed results = %d, want 0", failureCount)
 	}
 
 	contents, err := os.ReadFile(path)
@@ -319,6 +558,7 @@ func TestCreateFileFailureIsTerminal(t *testing.T) {
 		t.Fatalf("contents = %q, want empty", contents)
 	}
 	for _, result := range results {
+		if !result.Completed || result.Kind != primitives.IOCreateRegularFile {
 			t.Fatalf("child result = %#v", result)
 		}
 	}
@@ -366,6 +606,7 @@ func TestCreateFileProcessHelper(t *testing.T) {
 	request := primitives.IOCreateRequest{
 		Kind: primitives.IOCreateRegularFile,
 		Path: os.Getenv("HARNESS_CREATE_FILE_PATH"),
+		Mode: 0o600,
 	}
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
