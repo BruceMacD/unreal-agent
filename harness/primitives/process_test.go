@@ -14,7 +14,9 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
 )
 
+func startProcessWithAllPipes(ctx context.Context, request primitives.ProcessStartRequest) *processInvocation {
 	request.Pipes = primitives.ProcessPipeAll
+	return startProcess(ctx, request)
 }
 
 func TestProcessCapturesOutputIntoPaths(t *testing.T) {
@@ -38,6 +40,7 @@ func TestProcessCapturesOutputIntoPaths(t *testing.T) {
 		StdoutPath: stdoutPath,
 		StderrPath: stderrPath,
 	}
+	events := collectEvents(startProcess(t.Context(), request).Events())
 	if len(events) != 2 ||
 		events[0].Type != primitives.PrimitiveEventProcessStarted ||
 		events[1].Type != primitives.PrimitiveEventProcessExited {
@@ -70,6 +73,7 @@ func TestProcessCancellationCompletesCapturedOutput(t *testing.T) {
 		}
 	}
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcess(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -118,6 +122,7 @@ func TestProcessRejectsInvalidCaptureConfiguration(t *testing.T) {
 	} {
 		event := singleEvent(
 			t,
+			collectEvents(startProcess(t.Context(), request).Events()),
 			primitives.PrimitiveEventFailed,
 		)
 		if failure := eventResult[primitives.PrimitiveFailureResult](t, event); failure.Error == "" {
@@ -140,6 +145,7 @@ func TestProcessRejectsAliasedCapturePathsBeforeTruncating(t *testing.T) {
 
 	event := singleEvent(
 		t,
+		collectEvents(startProcess(t.Context(), primitives.ProcessStartRequest{
 			Path:       "/bin/true",
 			StdoutPath: stdoutPath,
 			StderrPath: stderrPath,
@@ -160,6 +166,7 @@ func TestProcessRejectsAliasedCapturePathsBeforeTruncating(t *testing.T) {
 }
 
 func TestProcessRejectsInvalidCapturePath(t *testing.T) {
+	events := collectEvents(startProcess(t.Context(), primitives.ProcessStartRequest{
 		Path:       "/bin/true",
 		StdoutPath: t.TempDir(),
 	}).Events())
@@ -304,12 +311,17 @@ func TestFileReadComposesWithProcessInput(t *testing.T) {
 		processEvents <- collectEvents(process.Events())
 	}()
 
+	readEvents := readFile(t.Context(), primitives.IOReadRequest{
 		Source:        "operation-1",
 		CorrelationID: "read-1",
 		Path:          path,
 		Count:         int64(len(data)),
 	})
 	writes := 0
+
+read:
+	for {
+		event := <-readEvents
 		switch event.Type {
 		case primitives.PrimitiveEventIOReadOutput:
 			chunk := eventResult[primitives.IOReadOutputResult](t, event)
@@ -327,6 +339,7 @@ func TestFileReadComposesWithProcessInput(t *testing.T) {
 			if result := eventResult[primitives.IOReadCompletedResult](t, event); result.Size != int64(len(data)) {
 				t.Fatalf("read completed = %#v", result)
 			}
+			break read
 		default:
 			t.Fatalf("read event = %#v", event)
 		}
@@ -648,12 +661,20 @@ func TestCompletedProcessIsNotCanceledAfterCancellationStops(t *testing.T) {
 		},
 	})
 	events := process.Events()
+	collectedEvents := make(chan []primitives.PrimitiveEvent, 1)
+	go func() {
+		collectedEvents <- collectEvents(events)
+	}()
 	pid := waitForProcessPID(t, marker)
 	waitForProcessGone(t, pid)
 	cancel()
 
+	collected := <-collectedEvents
+	if len(collected) < 2 || collected[0].Type != primitives.PrimitiveEventProcessStarted ||
+		collected[len(collected)-1].Type != primitives.PrimitiveEventProcessExited {
 		t.Fatalf("events = %#v", collected)
 	}
+	if result := eventResult[primitives.ProcessExitResult](t, collected[len(collected)-1]); result.ExitCode != 7 {
 		t.Fatalf("exit = %#v", result)
 	}
 }
@@ -837,6 +858,13 @@ func TestProcessExitTerminatesDescendantsWithoutWaitingForInheritedOutputPipes(t
 	if len(collected) != 3 || !strings.HasPrefix(string(output), "output:") {
 		t.Fatalf("events = %#v", collected)
 	}
+	select {
+	case trailing, open := <-events:
+		if !open {
+			t.Fatal("process closed the caller-owned event channel")
+		}
+		t.Fatalf("trailing event = %#v", trailing)
+	default:
 	}
 	if descendantPID <= 0 {
 		t.Fatalf("descendant PID = %d", descendantPID)
@@ -1014,6 +1042,7 @@ func TestProcessUsesDirectoryAndEnvironment(t *testing.T) {
 }
 
 func TestProcessSelectsParentPipes(t *testing.T) {
+	events := collectEvents(startProcess(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sh",
@@ -1035,6 +1064,7 @@ func TestProcessSelectsParentPipes(t *testing.T) {
 }
 
 func TestProcessUsesNoParentPipesByDefault(t *testing.T) {
+	events := collectEvents(startProcess(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/usr/bin/true",
@@ -1050,6 +1080,7 @@ func TestProcessUsesNoParentPipesByDefault(t *testing.T) {
 
 func TestProcessWithoutStdinPipeClosesInputIdempotently(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
+	process := startProcess(ctx, primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/sleep",
@@ -1072,6 +1103,7 @@ func TestProcessWithoutStdinPipeClosesInputIdempotently(t *testing.T) {
 }
 
 func TestProcessRejectsInvalidPipeSelection(t *testing.T) {
+	event := singleEvent(t, collectEvents(startProcess(t.Context(), primitives.ProcessStartRequest{
 		Source:        "operation-1",
 		CorrelationID: "process-1",
 		Path:          "/bin/true",
@@ -1416,6 +1448,11 @@ func collectProcessEvents(
 				return collected
 			}
 			collected = append(collected, event)
+			if event.Type == primitives.PrimitiveEventProcessExited ||
+				event.Type == primitives.PrimitiveEventFailed ||
+				event.Type == primitives.PrimitiveEventCanceled {
+				return collected
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("timed out waiting for process completion")
 			return nil

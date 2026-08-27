@@ -107,6 +107,8 @@ func (client *RemoteClient) Close() error {
 func (client *RemoteClient) SendRequest(
 	ctx context.Context,
 	request RemoteRequest,
+	events chan<- PrimitiveEvent,
+) {
 	go runRemoteRequest(ctx, client.httpClient, request, events)
 }
 
@@ -131,12 +133,15 @@ func runRemoteRequest(
 	ctx context.Context,
 	client *http.Client,
 	request RemoteRequest,
+	events chan<- PrimitiveEvent,
 ) {
 	baseRequest, err := prepareRemoteRequest(request)
 	if err != nil {
+		sendRemoteTerminalEvent(events, remoteFailure(request, err))
 		return
 	}
 	if ctx.Err() != nil {
+		sendRemoteTerminalEvent(events, remoteCanceled(request))
 		return
 	}
 
@@ -176,6 +181,7 @@ func runRemoteRequest(
 		idleTimeout.stop()
 
 		if ctx.Err() != nil {
+			sendRemoteTerminalEvent(events, remoteCanceled(request))
 			return
 		}
 		if streamFailed && !sendRemoteEvent(
@@ -183,6 +189,7 @@ func runRemoteRequest(
 			events,
 			remoteStreamFailure(request, attempt, attemptErr),
 		) {
+			sendRemoteTerminalEvent(events, remoteCanceled(request))
 			return
 		}
 		if attemptErr != nil && !isRetryableRemoteError(attemptErr) {
@@ -196,6 +203,7 @@ func runRemoteRequest(
 		if attemptErr == nil {
 			if !isRetryableRemoteStatus(request.RetryPolicy, response.StatusCode) ||
 				attempt == request.RetryPolicy.MaxAttempts {
+				sendRemoteTerminalEvent(events, PrimitiveEvent{
 					Type:          PrimitiveEventRemoteCompleted,
 					Source:        request.Source,
 					CorrelationID: request.CorrelationID,
@@ -218,9 +226,11 @@ func runRemoteRequest(
 			return
 		}
 		if !sendRemoteEvent(ctx, events, remoteRetryScheduled(request, attempt, attemptErr, delay)) {
+			sendRemoteTerminalEvent(events, remoteCanceled(request))
 			return
 		}
 		if !waitForRemoteRetry(ctx, delay) {
+			sendRemoteTerminalEvent(events, remoteCanceled(request))
 			return
 		}
 	}
@@ -350,6 +360,8 @@ func sendRemoteEvent(
 	}
 }
 
+func sendRemoteTerminalEvent(events chan<- PrimitiveEvent, event PrimitiveEvent) {
+	events <- event
 }
 
 func prepareRemoteRequest(request RemoteRequest) (*http.Request, error) {

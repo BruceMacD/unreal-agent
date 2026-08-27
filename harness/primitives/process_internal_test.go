@@ -317,9 +317,12 @@ func TestProcessControlCancellationWhileWaitingForStart(t *testing.T) {
 		ctx:   t.Context(),
 		ready: make(chan struct{}),
 	}
+	events := make(chan PrimitiveEvent)
+	process.Signal(ctx, ProcessSignalRequest{
 		Source:        "operation-1",
 		CorrelationID: "signal-1",
 		Signal:        syscall.SIGTERM,
+	}, events)
 	<-ctx.checked
 	cancel()
 
@@ -328,6 +331,7 @@ func TestProcessControlCancellationWhileWaitingForStart(t *testing.T) {
 		event.Source != "operation-1" || event.CorrelationID != "signal-1" {
 		t.Fatalf("event = %#v", event)
 	}
+	assertPrimitiveEventChannelOpen(t, events)
 }
 
 func TestProcessControlCancellationAfterStartBecomesReady(t *testing.T) {
@@ -339,15 +343,19 @@ func TestProcessControlCancellationAfterStartBecomesReady(t *testing.T) {
 		ctx:   t.Context(),
 		ready: ready,
 	}
+	events := make(chan PrimitiveEvent)
+	process.Signal(ctx, ProcessSignalRequest{
 		Source:        "operation-1",
 		CorrelationID: "signal-1",
 		Signal:        syscall.SIGTERM,
+	}, events)
 
 	event := <-events
 	if event.Type != PrimitiveEventCanceled ||
 		event.Source != "operation-1" || event.CorrelationID != "signal-1" {
 		t.Fatalf("event = %#v", event)
 	}
+	assertPrimitiveEventChannelOpen(t, events)
 }
 
 func TestRunProcessCanceledBeforeStart(t *testing.T) {
@@ -360,6 +368,8 @@ func TestRunProcessCanceledBeforeStart(t *testing.T) {
 	}
 	events := make(chan PrimitiveEvent, 1)
 	invocation := &ProcessInvocation{
+		ctx:   ctx,
+		ready: make(chan struct{}),
 	}
 	runProcess(ctx, request, invocation, events)
 
@@ -368,6 +378,7 @@ func TestRunProcessCanceledBeforeStart(t *testing.T) {
 		event.Source != request.Source || event.CorrelationID != request.CorrelationID {
 		t.Fatalf("event = %#v", event)
 	}
+	assertPrimitiveEventChannelOpen(t, events)
 }
 
 func TestRunProcessCanceledAfterPreparingPipes(t *testing.T) {
@@ -381,6 +392,8 @@ func TestRunProcessCanceledAfterPreparingPipes(t *testing.T) {
 	}
 	events := make(chan PrimitiveEvent, 1)
 	invocation := &ProcessInvocation{
+		ctx:   ctx,
+		ready: make(chan struct{}),
 	}
 	runProcess(ctx, request, invocation, events)
 
@@ -388,6 +401,7 @@ func TestRunProcessCanceledAfterPreparingPipes(t *testing.T) {
 	if !ok || event.Type != PrimitiveEventCanceled || invocation.process != nil {
 		t.Fatalf("event = %#v, process = %#v", event, invocation.process)
 	}
+	assertPrimitiveEventChannelOpen(t, events)
 }
 
 func TestPrepareProcessUsesNoPipesForZeroSelection(t *testing.T) {
@@ -544,6 +558,8 @@ func TestPrepareProcessClosesPipesAfterAllocationFailure(t *testing.T) {
 	}
 	events := make(chan PrimitiveEvent, 1)
 	invocation := &ProcessInvocation{
+		ctx:   t.Context(),
+		ready: make(chan struct{}),
 	}
 	runProcess(t.Context(), request, invocation, events)
 	if event := <-events; event.Type != PrimitiveEventFailed ||
@@ -804,6 +820,7 @@ func TestCanceledProcessEventDelivery(t *testing.T) {
 	}
 
 	request := ProcessStartRequest{Source: "operation-1", CorrelationID: "process-1"}
+	sendProcessTerminalEvent(events, PrimitiveEvent{
 		Type:          PrimitiveEventProcessExited,
 		Source:        request.Source,
 		CorrelationID: request.CorrelationID,
@@ -814,6 +831,7 @@ func TestCanceledProcessEventDelivery(t *testing.T) {
 	}
 
 	failure := processFailure(request.Source, request.CorrelationID, errors.New("failed"))
+	sendProcessTerminalEvent(events, failure)
 	if event := <-events; event.Type != PrimitiveEventFailed {
 		t.Fatalf("failure event = %#v", event)
 	}
@@ -844,6 +862,7 @@ func TestBlockedProcessTerminalDeliveryPreservesQueuedEvent(t *testing.T) {
 	events <- PrimitiveEvent{Type: PrimitiveEventProcessOutput}
 	delivered := make(chan struct{})
 	go func() {
+		sendProcessTerminalEvent(events, PrimitiveEvent{Type: PrimitiveEventProcessExited})
 		close(delivered)
 	}()
 	if event := <-events; event.Type != PrimitiveEventProcessOutput {
@@ -855,10 +874,33 @@ func TestBlockedProcessTerminalDeliveryPreservesQueuedEvent(t *testing.T) {
 	}
 }
 
+func TestProcessTerminalDeliveryDoesNotReplaceQueuedEvent(t *testing.T) {
 	events := make(chan PrimitiveEvent, 1)
 	events <- PrimitiveEvent{Type: PrimitiveEventProcessOutput}
+	delivered := make(chan struct{})
+	go func() {
+		sendProcessTerminalEvent(events, PrimitiveEvent{Type: PrimitiveEventCanceled})
+		close(delivered)
+	}()
 
+	if event := <-events; event.Type != PrimitiveEventProcessOutput {
 		t.Fatalf("event = %#v", event)
+	}
+	<-delivered
+	if event := <-events; event.Type != PrimitiveEventCanceled {
+		t.Fatalf("terminal event = %#v", event)
+	}
+}
+
+func assertPrimitiveEventChannelOpen(t *testing.T, events <-chan PrimitiveEvent) {
+	t.Helper()
+	select {
+	case event, ok := <-events:
+		if !ok {
+			t.Fatal("caller-owned event channel was closed")
+		}
+		t.Fatalf("unexpected event = %#v", event)
+	default:
 	}
 }
 

@@ -123,8 +123,11 @@ type ProcessInvocation struct {
 func StartProcess(
 	ctx context.Context,
 	request ProcessStartRequest,
+	events chan<- PrimitiveEvent,
 ) *ProcessInvocation {
 	invocation := &ProcessInvocation{
+		ctx:   ctx,
+		ready: make(chan struct{}),
 	}
 	go runProcess(ctx, request, invocation, events)
 	return invocation
@@ -136,6 +139,8 @@ func StartProcess(
 func (process *ProcessInvocation) WriteInput(
 	ctx context.Context,
 	request ProcessWriteRequest,
+	events chan<- PrimitiveEvent,
+) {
 	go process.writeInput(ctx, request, events)
 }
 
@@ -189,6 +194,8 @@ func processInputWriteFailure(
 func (process *ProcessInvocation) CloseInput(
 	ctx context.Context,
 	request ProcessCloseInputRequest,
+	events chan<- PrimitiveEvent,
+) {
 	go process.closeInput(ctx, request, events)
 }
 
@@ -227,6 +234,8 @@ func processInputClosed(request ProcessCloseInputRequest) PrimitiveEvent {
 func (process *ProcessInvocation) Signal(
 	ctx context.Context,
 	request ProcessSignalRequest,
+	events chan<- PrimitiveEvent,
+) {
 	go process.signal(ctx, request, events)
 }
 
@@ -311,15 +320,18 @@ func runProcess(
 	ctx context.Context,
 	request ProcessStartRequest,
 	process *ProcessInvocation,
+	events chan<- PrimitiveEvent,
 ) {
 	if err := validateProcessStartRequest(request); err != nil {
 		process.startErr = err
 		close(process.ready)
+		sendProcessTerminalEvent(events, processFailure(request.Source, request.CorrelationID, err))
 		return
 	}
 	if ctx.Err() != nil {
 		process.startErr = ctx.Err()
 		close(process.ready)
+		sendProcessTerminalEvent(events, processCanceled(request.Source, request.CorrelationID))
 		return
 	}
 
@@ -327,6 +339,7 @@ func runProcess(
 	if err != nil {
 		process.startErr = err
 		close(process.ready)
+		sendProcessTerminalEvent(events, processFailure(request.Source, request.CorrelationID, err))
 		return
 	}
 	if ctx.Err() != nil {
@@ -350,6 +363,7 @@ func runProcess(
 		)
 		process.startErr = startErr
 		close(process.ready)
+		sendProcessTerminalEvent(events, processFailure(request.Source, request.CorrelationID, startErr))
 		return
 	}
 
@@ -1031,6 +1045,8 @@ func sendProcessEvent(
 	}
 }
 
+func sendProcessTerminalEvent(events chan<- PrimitiveEvent, event PrimitiveEvent) {
+	events <- event
 }
 
 func processCompletionEvent(

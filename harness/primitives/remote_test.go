@@ -80,6 +80,7 @@ func TestRemoteClientReusesConnectionsAcrossRequests(t *testing.T) {
 	request := DefaultRemoteRequest("operation-1", "remote-1", server.URL)
 	request.RetryPolicy.MaxAttempts = 1
 	for range 2 {
+		events := collectInternalEvents(sendRemoteRequest(client, t.Context(), request))
 		if last := events[len(events)-1]; last.Type != PrimitiveEventRemoteCompleted {
 			t.Fatalf("events = %#v", events)
 		}
@@ -325,6 +326,7 @@ func TestSendRemoteRequestRetriesResponseIdleTimeout(t *testing.T) {
 		request := DefaultRemoteRequest("operation-1", "remote-1", "https://example.com")
 		request.ResponseIdleTimeout = time.Second
 		request.RetryPolicy = RemoteRetryPolicy{MaxAttempts: 2}
+		events := collectInternalEvents(sendRemoteRequest(client, t.Context(), request))
 		if len(events) != 2 || events[0].Type != PrimitiveEventRemoteRetryScheduled ||
 			events[1].Type != PrimitiveEventFailed {
 			t.Fatalf("events = %#v", events)
@@ -360,6 +362,7 @@ func TestSendRemoteRequestResponseIdleTimeoutResetsOnBodyProgress(t *testing.T) 
 		request.RetryPolicy.MaxAttempts = 1
 		startedAt := time.Now()
 
+		events := collectInternalEvents(sendRemoteRequest(client, t.Context(), request))
 		if elapsed := time.Since(startedAt); elapsed <= request.ResponseIdleTimeout {
 			t.Fatalf("elapsed = %s, want more than one idle interval", elapsed)
 		}
@@ -383,6 +386,7 @@ func TestSendRemoteRequestResponseIdleTimeoutExcludesConsumerBackpressure(t *tes
 		request := DefaultRemoteRequest("operation-1", "remote-1", "https://example.com")
 		request.ResponseIdleTimeout = time.Second
 		request.RetryPolicy.MaxAttempts = 1
+		events := sendRemoteRequest(client, t.Context(), request)
 
 		started := <-events
 		if started.Type != PrimitiveEventRemoteResponseStarted {
@@ -416,6 +420,7 @@ func TestSendRemoteRequestIgnoresResponseCloseErrorAfterEOF(t *testing.T) {
 		request.ResponseIdleTimeout = time.Second
 		request.RetryPolicy.MaxAttempts = 1
 
+		events := collectInternalEvents(sendRemoteRequest(client, t.Context(), request))
 		assertRemoteEventTypes(t, events, []PrimitiveEventType{
 			PrimitiveEventRemoteResponseStarted,
 			PrimitiveEventRemoteOutput,
@@ -896,6 +901,7 @@ func TestRunRemoteRequestCancellationWinsOverReadAndCloseErrors(t *testing.T) {
 	}
 }
 
+func TestRunRemoteRequestCancellationPreservesBufferedResponseEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		client := remoteTestClient(&trackingRemoteBody{Reader: strings.NewReader("output")})
@@ -909,13 +915,18 @@ func TestRunRemoteRequestCancellationWinsOverReadAndCloseErrors(t *testing.T) {
 		synctest.Wait()
 
 		cancel()
+		if event := <-events; event.Type != PrimitiveEventRemoteResponseStarted {
+			t.Fatalf("buffered event = %#v", event)
+		}
 		<-done
 		if event := <-events; event.Type != PrimitiveEventCanceled {
 			t.Fatalf("terminal event = %#v", event)
 		}
+		assertPrimitiveEventChannelOpen(t, events)
 	})
 }
 
+func TestRunRemoteRequestCancellationPreservesBufferedOutputEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		client := remoteTestClient(&trackingRemoteBody{
@@ -937,10 +948,14 @@ func TestRunRemoteRequestCancellationWinsOverReadAndCloseErrors(t *testing.T) {
 		}
 		synctest.Wait()
 		cancel()
+		if event := <-events; event.Type != PrimitiveEventRemoteOutput {
+			t.Fatalf("buffered event = %#v", event)
+		}
 		<-done
 		if event := <-events; event.Type != PrimitiveEventCanceled {
 			t.Fatalf("terminal event = %#v", event)
 		}
+		assertPrimitiveEventChannelOpen(t, events)
 	})
 }
 
@@ -963,9 +978,11 @@ func TestRunRemoteRequestCompletedEventDoesNotRequireImmediateDrain(t *testing.T
 		if event := <-events; event.Type != PrimitiveEventRemoteCompleted {
 			t.Fatalf("terminal event = %#v", event)
 		}
+		assertPrimitiveEventChannelOpen(t, events)
 	})
 }
 
+func TestRunRemoteRequestCancellationPreservesQueuedEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		client := &http.Client{Transport: remoteRoundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -982,10 +999,14 @@ func TestRunRemoteRequestCompletedEventDoesNotRequireImmediateDrain(t *testing.T
 		synctest.Wait()
 
 		cancel()
+		if event := <-events; event.Type != PrimitiveEventRemoteOutput {
+			t.Fatalf("queued event = %#v", event)
+		}
 		<-done
 		if event := <-events; event.Type != PrimitiveEventCanceled {
 			t.Fatalf("terminal event = %#v", event)
 		}
+		assertPrimitiveEventChannelOpen(t, events)
 	})
 }
 
@@ -1104,6 +1125,17 @@ func sendTestRemoteRequest(
 			t.Errorf("close remote client: %v", err)
 		}
 	})
+	return sendRemoteRequest(client, ctx, request)
+}
+
+func sendRemoteRequest(
+	client *RemoteClient,
+	ctx context.Context,
+	request RemoteRequest,
+) <-chan PrimitiveEvent {
+	events := make(chan PrimitiveEvent)
+	client.SendRequest(ctx, request, events)
+	return events
 }
 
 type remoteTimeoutError struct{}

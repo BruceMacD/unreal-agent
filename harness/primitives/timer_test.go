@@ -18,6 +18,7 @@ func TestScheduleTimerFiresAtAbsoluteDeadline(t *testing.T) {
 			CorrelationID: "timer-1",
 			Deadline:      startedAt.Add(15 * time.Minute),
 		}
+		events := scheduleTimer(t.Context(), request)
 
 		synctest.Wait()
 		assertNoTimerEvent(t, events)
@@ -51,6 +52,7 @@ func TestScheduleTimerFiresImmediatelyAtExpiredDeadline(t *testing.T) {
 
 		event := singleEvent(
 			t,
+			collectEvents(scheduleTimer(t.Context(), request)),
 			primitives.PrimitiveEventTimerFired,
 		)
 		result := eventResult[primitives.TimerResult](t, event)
@@ -75,6 +77,7 @@ func TestScheduleTimerCanceledBeforeStart(t *testing.T) {
 
 		event := singleEvent(
 			t,
+			collectEvents(scheduleTimer(ctx, request)),
 			primitives.PrimitiveEventCanceled,
 		)
 		assertCanceledTimerIdentity(t, event, request)
@@ -90,6 +93,7 @@ func TestScheduleTimerCancellationInterruptsWait(t *testing.T) {
 			CorrelationID: "timer-1",
 			Deadline:      startedAt.Add(time.Hour),
 		}
+		events := scheduleTimer(ctx, request)
 		synctest.Wait()
 		assertNoTimerEvent(t, events)
 
@@ -110,6 +114,7 @@ func TestScheduleTimerRejectsUnsetDeadline(t *testing.T) {
 
 	event := singleEvent(
 		t,
+		collectEvents(scheduleTimer(t.Context(), request)),
 		primitives.PrimitiveEventFailed,
 	)
 	if event.Source != request.Source || event.CorrelationID != request.CorrelationID {

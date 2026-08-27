@@ -33,6 +33,7 @@ import (
 	nextOffset := offset
 	outputEvents := 0
 	var completed primitives.IOReadCompletedResult
+	for _, event := range collectEvents(readFile(t.Context(), request)) {
 		if event.Source != request.Source || event.CorrelationID != request.CorrelationID {
 			t.Fatalf("event identity = (%q, %q)", event.Source, event.CorrelationID)
 		}
@@ -78,6 +79,7 @@ func TestReadFileClampsRangeToEndOfFile(t *testing.T) {
 	}
 
 	var output []byte
+	for _, event := range collectEvents(readFile(t.Context(), request)) {
 		if event.Type == primitives.PrimitiveEventIOReadOutput {
 			output = append(output, eventResult[primitives.IOReadOutputResult](t, event).Data...)
 		}
@@ -93,6 +95,7 @@ func TestReadFileWithZeroCountEmitsOnlyCompletion(t *testing.T) {
 	path := writeTestFile(t, contents)
 	request := primitives.IOReadRequest{Path: path}
 
+	events := collectEvents(readFile(t.Context(), request))
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
 	}
@@ -107,6 +110,7 @@ func TestReadFileCanceledBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
+	events := collectEvents(readFile(ctx, primitives.IOReadRequest{Path: "unused"}))
 	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventCanceled {
 		t.Fatalf("events = %#v, want one cancellation", events)
 	}
@@ -126,12 +130,18 @@ func TestReadFileCancellationTerminatesStream(t *testing.T) {
 
 	outputEvents := 0
 	canceledEvents := 0
+	events := readFile(ctx, request)
+
+stream:
+	for {
+		event := <-events
 		switch event.Type {
 		case primitives.PrimitiveEventIOReadOutput:
 			outputEvents++
 			cancel()
 		case primitives.PrimitiveEventCanceled:
 			canceledEvents++
+			break stream
 		case primitives.PrimitiveEventIOReadCompleted:
 			t.Fatal("canceled read completed")
 		default:
@@ -155,6 +165,7 @@ func TestReadFileFailureIsTerminal(t *testing.T) {
 		Count:         1,
 	}
 
+	events := collectEvents(readFile(t.Context(), request))
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
 	}
@@ -188,6 +199,7 @@ func TestReadFileIgnoresAdvisoryFileLock(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
+	events := collectEvents(readFile(ctx, primitives.IOReadRequest{
 		Path:  path,
 		Count: int64(len(contents)),
 	}))
@@ -208,6 +220,7 @@ func TestReadFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
+	events := readFile(ctx, primitives.IOReadRequest{Path: path, Count: 1})
 	select {
 	case event := <-events:
 		if event.Type != primitives.PrimitiveEventFailed {
@@ -220,6 +233,13 @@ func TestReadFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("opening FIFO blocked")
 	}
+	select {
+	case _, open := <-events:
+		if !open {
+			t.Fatal("primitive closed the caller-owned channel")
+		}
+		t.Fatal("unexpected event after failure")
+	default:
 	}
 }
 
@@ -229,6 +249,7 @@ func TestReadFileRejectsNegativeRange(t *testing.T) {
 		Offset: -1,
 	}
 
+	events := collectEvents(readFile(t.Context(), request))
 	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventFailed {
 		t.Fatalf("events = %#v, want one failure", events)
 	}
@@ -244,6 +265,7 @@ func TestReadFileRejectsNegativeCount(t *testing.T) {
 		Count: -1,
 	}
 
+	events := collectEvents(readFile(t.Context(), request))
 	if len(events) != 1 || events[0].Type != primitives.PrimitiveEventFailed {
 		t.Fatalf("events = %#v, want one failure", events)
 	}

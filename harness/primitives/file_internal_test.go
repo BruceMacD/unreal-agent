@@ -146,7 +146,31 @@ type cancelingFile struct {
 
 func collectInternalEvents(events <-chan PrimitiveEvent) []PrimitiveEvent {
 	var collected []PrimitiveEvent
+	for {
+		event := <-events
 		collected = append(collected, event)
+		if internalPrimitiveEventIsTerminal(event.Type) {
+			return collected
+		}
+	}
+}
+
+func internalPrimitiveEventIsTerminal(eventType PrimitiveEventType) bool {
+	switch eventType {
+	case PrimitiveEventFailed,
+		PrimitiveEventCanceled,
+		PrimitiveEventIOCreateCompleted,
+		PrimitiveEventIOReadCompleted,
+		PrimitiveEventProcessExited,
+		PrimitiveEventProcessInputWritten,
+		PrimitiveEventProcessInputWriteFailed,
+		PrimitiveEventProcessInputClosed,
+		PrimitiveEventProcessSignaled,
+		PrimitiveEventRemoteCompleted,
+		PrimitiveEventTimerFired:
+		return true
+	default:
+		return false
 	}
 }
 

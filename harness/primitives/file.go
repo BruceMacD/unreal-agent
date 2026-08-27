@@ -41,6 +41,7 @@ type IOReadOutputResult struct {
 type IOReadCompletedResult struct {
 }
 
+func ReadFile(ctx context.Context, request IOReadRequest, events chan<- PrimitiveEvent) {
 	go streamFile(ctx, request, events)
 }
 
@@ -170,6 +171,7 @@ type IOCreateResult struct {
 	Kind IOCreateKind
 }
 
+func Create(ctx context.Context, request IOCreateRequest, events chan<- PrimitiveEvent) {
 	go createPath(ctx, request, events)
 }
 

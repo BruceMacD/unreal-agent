@@ -61,6 +61,9 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 		request := oneDispatchData[primitives.IOCreateRequest](t, step, primitives.PrimitiveDispatchIOCreate)
+		events := make(chan primitives.PrimitiveEvent)
+		primitives.Create(t.Context(), request, events)
+		event := receiveOnlyPrimitiveEvent(t, events)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -370,6 +373,7 @@ func runShellActorObserved(
 	defer func() {
 		cancelRuntime()
 		if active != nil {
+			drainPrimitiveInvocation(active.events)
 		}
 	}()
 
@@ -390,6 +394,7 @@ func runShellActorObserved(
 		select {
 		case <-ctx.Done():
 			cancelRuntime()
+			drainPrimitiveInvocation(active.events)
 			active = nil
 
 		case event, open := <-active.events:
@@ -423,13 +428,20 @@ func startPrimitive(
 	dispatch operation.PrimitiveDispatch,
 ) primitiveInvocation {
 	t.Helper()
+	events := make(chan primitives.PrimitiveEvent)
 	switch dispatch.Type {
 	case primitives.PrimitiveDispatchIOCreate:
 		request := dispatchData[primitives.IOCreateRequest](t, dispatch)
+		primitives.Create(ctx, request, events)
+		return primitiveInvocation{request.Source, request.CorrelationID, events}
 	case primitives.PrimitiveDispatchIORead:
 		request := dispatchData[primitives.IOReadRequest](t, dispatch)
+		primitives.ReadFile(ctx, request, events)
+		return primitiveInvocation{request.Source, request.CorrelationID, events}
 	case primitives.PrimitiveDispatchProcessStart:
 		request := dispatchData[primitives.ProcessStartRequest](t, dispatch)
+		primitives.StartProcess(ctx, request, events)
+		return primitiveInvocation{request.Source, request.CorrelationID, events}
 	default:
 		t.Fatalf("unexpected dispatch type %q", dispatch.Type)
 		return primitiveInvocation{}
@@ -446,6 +458,14 @@ func primitiveEventIsTerminal(event primitives.PrimitiveEvent) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func drainPrimitiveInvocation(events <-chan primitives.PrimitiveEvent) {
+	for {
+		if primitiveEventIsTerminal(<-events) {
+			return
+		}
 	}
 }
 
@@ -479,6 +499,13 @@ func receiveOnlyPrimitiveEvent(
 	if !open {
 		t.Fatal("primitive closed without an event")
 	}
+	select {
+	case event, open := <-events:
+		if !open {
+			t.Fatal("primitive closed the caller-owned channel")
+		}
+		t.Fatalf("primitive returned another event: %#v", event)
+	default:
 	}
 	return event
 }

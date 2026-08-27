@@ -22,11 +22,18 @@ type TimerResult struct {
 	FiredAt  time.Time
 }
 
+func ScheduleTimer(ctx context.Context, request TimerRequest, events chan<- PrimitiveEvent) {
+	go runTimer(ctx, request, events)
+}
+
+func runTimer(ctx context.Context, request TimerRequest, events chan<- PrimitiveEvent) {
 	if err := validateTimerRequest(request); err != nil {
 		events <- timerFailure(request, err)
+		return
 	}
 	if ctx.Err() != nil {
 		events <- timerCanceled(request)
+		return
 	}
 
 	deadline := request.Deadline.Round(0)
