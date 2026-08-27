@@ -77,6 +77,7 @@ func TestTranslatorRejectsInvalidArguments(t *testing.T) {
 		{name: "missing command", arguments: `{}`, want: `bash argument "command" must be set`},
 		{name: "uppercase command", arguments: `{"COMMAND":"pwd"}`, want: `bash argument "command" must be set`},
 		{name: "null command", arguments: `{"command":null}`, want: `bash argument "command" must be a string`},
+		{name: "non-string command", arguments: `{"command":42}`, want: `decode Bash argument "command": json:`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
