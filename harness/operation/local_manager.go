@@ -13,6 +13,7 @@ type LocalOperationManager struct {
 	cancellations   chan localCancelRequest
 	primitiveEvents chan primitives.PrimitiveEvent
 	updates         chan Operation
+	pendingUpdates  []Operation
 }
 
 type localAddRequest struct {
@@ -71,11 +72,23 @@ func (manager *LocalOperationManager) Updates() <-chan Operation {
 }
 
 func (manager *LocalOperationManager) run() {
+	defer close(manager.updates)
 	operations := make(map[ID]*localRunningOperation)
 	activePrimitives := 0
 
 	for {
+		var updates chan Operation
+		var update Operation
+		if len(manager.pendingUpdates) != 0 {
+			updates = manager.updates
+			update = manager.pendingUpdates[0]
+		}
+
 		select {
+		case updates <- update:
+			manager.pendingUpdates[0] = Operation{}
+			manager.pendingUpdates = manager.pendingUpdates[1:]
+
 		case request := <-manager.adds:
 				continue
 			}
@@ -162,6 +175,7 @@ func (manager *LocalOperationManager) drainLocalPrimitives(active int) {
 func (manager *LocalOperationManager) appendLocalUpdate(operation Operation) {
 	operation.State = operation.State.Clone()
 	operation.Idempotency = operation.Idempotency.Clone()
+	manager.pendingUpdates = append(manager.pendingUpdates, operation)
 }
 
 func advanceLocalOperation(current Operation, event *primitives.PrimitiveEvent) (Step, error) {
