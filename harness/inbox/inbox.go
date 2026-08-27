@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"encoding/json/jsontext"
 )
 
 type ID string

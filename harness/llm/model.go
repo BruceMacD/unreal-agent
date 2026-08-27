@@ -1,5 +1,6 @@
 package llm
 
+import "encoding/json/jsontext"
 
 type Role string
 

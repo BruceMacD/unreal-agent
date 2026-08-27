@@ -2,6 +2,8 @@ package responsesapi
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -33,6 +35,7 @@ func TestAdapterResponds(t *testing.T) {
 	requestBody := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body map[string]any
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requestBody <- body
@@ -73,6 +76,7 @@ func TestAdapterResponds(t *testing.T) {
 				Type:       llm.ItemReasoning,
 				Data: llm.Reasoning{
 					Summary: []string{"Used tools."},
+					Raw: jsontext.Value(`{"id":"reasoning-1","type":"reasoning","status":"completed",` +
 						`"summary":[{"type":"summary_text","text":"Used tools."}],"encrypted_content":"opaque"}`),
 				},
 			},
@@ -89,6 +93,7 @@ func TestAdapterResponds(t *testing.T) {
 		Usage: llm.Usage{
 			InputTokens: 20, CachedInputTokens: 8, CacheWriteInputTokens: 3,
 			OutputTokens: 10, ReasoningTokens: 4,
+			Raw: jsontext.Value(`{"input_tokens":20,"input_tokens_details":{"cached_tokens":8,"cache_write_tokens":3},` +
 				`"output_tokens":10,"output_tokens_details":{"reasoning_tokens":4},"total_tokens":30}`),
 		},
 	}
@@ -160,6 +165,7 @@ func TestResponseSeparatesStopReasonsFromFailures(t *testing.T) {
 				ID: "resp-1", Stop: llm.StopMaxOutputTokens, Output: []llm.Item{},
 				Usage: llm.Usage{
 					InputTokens: 2, OutputTokens: 1,
+					Raw: jsontext.Value(`{"input_tokens":2,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{}}`),
 				},
 			},
 		},
@@ -170,6 +176,7 @@ func TestResponseSeparatesStopReasonsFromFailures(t *testing.T) {
 				ID: "resp-2", Stop: llm.StopRefused, Output: []llm.Item{},
 				Usage: llm.Usage{
 					InputTokens: 2,
+					Raw:         jsontext.Value(`{"input_tokens":2,"input_tokens_details":{},"output_tokens":0,"output_tokens_details":{}}`),
 				},
 			},
 		},
@@ -180,6 +187,7 @@ func TestResponseSeparatesStopReasonsFromFailures(t *testing.T) {
 				ID: "resp-3", Output: []llm.Item{},
 				Usage: llm.Usage{
 					InputTokens: 2,
+					Raw:         jsontext.Value(`{"input_tokens":2,"input_tokens_details":{},"output_tokens":0,"output_tokens_details":{}}`),
 				},
 				Failure: &llm.Failure{Code: "server_error", Message: "failed"},
 			},
@@ -393,6 +401,7 @@ func detailedRequest() llm.Request {
 				Type:       llm.ItemReasoning,
 				Data: llm.Reasoning{
 					Summary: []string{"Checked the request."},
+					Raw: jsontext.Value(`{"id":"previous-reasoning","type":"reasoning","status":"completed",` +
 						`"summary":[{"type":"summary_text","text":"Checked the request."}],` +
 						`"content":[{"type":"reasoning_text","text":"verbatim"}],` +
 						`"encrypted_content":"previous-opaque"}`),
@@ -464,6 +473,8 @@ func assertRequestBody(t *testing.T, got map[string]any) {
 		t.Fatalf("unmarshal expected request: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.Marshal(got, jsontext.WithIndent("  "))
+		wantJSON, _ := json.Marshal(want, jsontext.WithIndent("  "))
 		t.Fatalf("request body =\n%s\nwant\n%s", gotJSON, wantJSON)
 	}
 }

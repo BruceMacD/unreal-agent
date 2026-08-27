@@ -1,6 +1,8 @@
 package bash
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 
@@ -26,6 +28,7 @@ func (translator *translator) Translate(ctx tool.Context, call llm.ToolCall) too
 	return tool.CallStatus{WaitingFor: []operation.ID{id}}
 }
 
+	var arguments map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(encoded), &arguments); err != nil {
 	}
 	encodedCommand, exists := arguments["command"]

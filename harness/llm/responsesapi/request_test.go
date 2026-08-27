@@ -1,6 +1,8 @@
 package responsesapi
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"reflect"
 	"testing"
 
@@ -96,6 +98,7 @@ func TestRequestInputItemReplaysRawReasoningVerbatim(t *testing.T) {
 		Type:       llm.ItemReasoning,
 		Data: llm.Reasoning{
 			Summary: []string{"stale summary"},
+			Raw:     jsontext.Value(raw),
 		},
 	})
 	if err != nil {

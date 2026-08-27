@@ -2,6 +2,7 @@
 package operation
 
 import (
+	"encoding/json/jsontext"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
 )

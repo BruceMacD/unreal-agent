@@ -2,6 +2,7 @@ package responsesapi
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"

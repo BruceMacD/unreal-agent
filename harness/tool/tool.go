@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"encoding/json/jsontext"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
@@ -21,6 +22,7 @@ type Translator interface {
 
 type Definition struct {
 	Tool     llm.Tool
+	Metadata jsontext.Value
 }
 
 type Registry interface {

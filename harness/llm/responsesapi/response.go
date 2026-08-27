@@ -1,6 +1,8 @@
 package responsesapi
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 
@@ -10,6 +12,7 @@ import (
 
 func decodeResponse(body []byte) (llm.Response, error) {
 	var envelope struct {
+		Usage jsontext.Value `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return llm.Response{}, fmt.Errorf("decode response: %w", err)

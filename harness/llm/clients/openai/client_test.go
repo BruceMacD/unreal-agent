@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -35,6 +36,7 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 		}
 		var body struct {
 		}
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 			t.Errorf("body = %#v", body)

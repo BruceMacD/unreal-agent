@@ -1,6 +1,7 @@
 package responsesapi
 
 import (
+	"encoding/json/v2"
 	"testing"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"

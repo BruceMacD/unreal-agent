@@ -3,6 +3,8 @@ package primitives_test
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -534,6 +536,8 @@ func TestCreateFileConcurrentProcessesAreIdempotent(t *testing.T) {
 				child.stderr.String(),
 			)
 		}
+		decoder := jsontext.NewDecoder(&child.stdout)
+		if err := json.UnmarshalDecode(decoder, &results[index]); err != nil {
 			t.Fatalf("decode child %d output %q: %v", index, child.stdout.String(), err)
 		}
 		if results[index].Completed {
@@ -623,6 +627,7 @@ func TestCreateFileProcessHelper(t *testing.T) {
 	default:
 		result.Error = fmt.Sprintf("unexpected event type %q", events[0].Type)
 	}
+	if err := json.MarshalWrite(os.Stdout, result); err != nil {
 		t.Fatal(err)
 	}
 }

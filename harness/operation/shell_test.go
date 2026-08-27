@@ -3,6 +3,7 @@ package operation_test
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"

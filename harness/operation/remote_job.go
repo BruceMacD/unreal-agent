@@ -1,6 +1,7 @@
 package operation
 
 import (
+	"encoding/json/jsontext"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type RemoteJobPlanVersion uint32
 type RemoteJobPlan struct {
 	Type    RemoteJobPlanType
 	Version RemoteJobPlanVersion
+	Data    jsontext.Value
 }
 
 type RemoteJobState struct {

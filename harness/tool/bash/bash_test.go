@@ -1,6 +1,7 @@
 package bash_test
 
 import (
+	"encoding/json/v2"
 	"reflect"
 	"strings"
 	"testing"
@@ -71,6 +72,8 @@ func TestTranslatorRejectsInvalidArguments(t *testing.T) {
 		arguments string
 		want      string
 	}{
+		{name: "malformed JSON", arguments: `{`, want: "decode Bash arguments: jsontext: unexpected EOF"},
+		{name: "duplicate command", arguments: `{"command":"pwd","command":"ls"}`, want: `duplicate object member name "command"`},
 		{name: "missing command", arguments: `{}`, want: `bash argument "command" must be set`},
 		{name: "uppercase command", arguments: `{"COMMAND":"pwd"}`, want: `bash argument "command" must be set`},
 		{name: "null command", arguments: `{"command":null}`, want: `bash argument "command" must be a string`},
