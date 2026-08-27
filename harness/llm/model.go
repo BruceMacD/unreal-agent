@@ -45,6 +45,8 @@ type ToolResult struct {
 // it that the harness cannot reconstruct, such as encrypted reasoning content, so
 // adapters replay Raw unchanged instead of re-encoding Summary.
 type Reasoning struct {
+	Summary []string       `json:",omitzero"`
+	Raw     jsontext.Value `json:",omitzero"`
 }
 
 type ToolType string
@@ -83,6 +85,7 @@ const (
 type Response struct {
 	ID      string
 	Stop    StopReason
+	Output  []Item `json:",omitzero"`
 	Usage   Usage
 	Failure *Failure
 }
@@ -95,6 +98,7 @@ type Usage struct {
 	CacheWriteInputTokens int64
 	OutputTokens          int64
 	ReasoningTokens       int64
+	Raw                   jsontext.Value `json:",omitzero"`
 }
 
 type Failure struct {

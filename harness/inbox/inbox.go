@@ -15,6 +15,7 @@ const (
 type Input struct {
 	ID      ID
 	Kind    InputKind
+	Payload jsontext.Value `json:",omitzero"`
 }
 
 }

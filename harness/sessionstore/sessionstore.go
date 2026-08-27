@@ -60,12 +60,15 @@ type Page struct {
 type ResumeState struct {
 }
 
+// Store does not serialize methods for the same session ID.
 type Store interface {
 	Create(context.Context, session.ID) (Snapshot, error)
 	Inspect(context.Context, session.ID) (Snapshot, error)
 	Items(context.Context, session.ID, Sequence, int) (Page, error)
 	AppendTurn(context.Context, session.ID, session.Turn) error
+	AppendModelResponse(context.Context, session.ID, ModelResponse) error
 	// SaveOperation stores a complete state; the latest state for its ID wins.
+	SaveOperation(context.Context, session.ID, operation.Operation) error
 	Resume(context.Context, session.ID) (ResumeState, error)
 	Fork(
 		ctx context.Context,

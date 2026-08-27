@@ -26,6 +26,13 @@ import (
 	}
 }
 
+	if err != nil {
+		t.Fatal(err)
+	}
+	}
+	}
+}
+
 
 	if err != nil {
 	}
