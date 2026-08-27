@@ -12,6 +12,8 @@ import (
 type Config struct {
 }
 
+type Exchange = responsesapi.Exchange
+
 type Client struct {
 	llm.Adapter
 	remote *primitives.RemoteClient
