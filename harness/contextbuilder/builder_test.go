@@ -64,6 +64,39 @@ import (
 	}
 }
 
+func TestBuilderAddsModelResponseOutput(t *testing.T) {
+	output := []llm.Item{
+		{
+			ProviderID: "reasoning-1",
+			Type:       llm.ItemReasoning,
+			Data:       llm.Reasoning{Summary: []string{"Need current weather."}},
+		},
+		{
+			ProviderID: "message-1",
+			Type:       llm.ItemMessage,
+			Data:       llm.Message{Role: llm.RoleAssistant, Text: "Checking."},
+		},
+		{
+			ProviderID: "call-item-1",
+			Type:       llm.ItemToolCall,
+			Data: llm.ToolCall{
+				CallID: "call-1", Name: "weather", Arguments: `{"city":"London"}`,
+			},
+		},
+	}
+	current := NewBuilder()
+	current.AddModelResponse(llm.Response{
+		ID: "response-1", Stop: llm.StopComplete, Output: output,
+		Usage: llm.Usage{InputTokens: 12, OutputTokens: 8},
+	})
+
+	result, err := current.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	}
+}
+
 func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 	model := llm.Model{ID: "gpt-test"}
 	weather := llm.Tool{
@@ -77,6 +110,10 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 	current := NewBuilder()
 	current.AddTool(weather)
 	current.AddReasoning(reasoning)
+	current.AddModelResponse(llm.Response{Output: []llm.Item{{
+		Type: llm.ItemToolCall,
+		Data: call,
+	}}})
 	result, err := current.Build()
 	if err != nil {
 		t.Fatal(err)

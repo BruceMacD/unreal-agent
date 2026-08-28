@@ -30,6 +30,9 @@ var _ Builder = (*builder)(nil)
 	current.request.Model = model
 }
 
+func (current *builder) AddModelResponse(response llm.Response) {
+}
+
 func (current *builder) AddReasoning(reasoning llm.Reasoning) {
 		Type: llm.ItemReasoning,
 		Data: reasoning,
