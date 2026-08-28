@@ -28,6 +28,35 @@ func (translator *translator) Translate(ctx tool.Context, call llm.ToolCall) too
 	return tool.CallStatus{WaitingFor: []operation.ID{id}}
 }
 
+func (translator *translator) TranslateResult(
+	callID string,
+	status tool.CallStatus,
+	operations []operation.Operation,
+) (llm.ToolResult, error) {
+		}
+	}
+
+	if err != nil {
+	}
+}
+
+func translateOperationResult(
+	callID string,
+	current operation.Operation,
+	if current.Type != operation.TypeShell {
+			"bash tool call %q operation %q has type %q, want %q",
+			callID,
+			current.ID,
+			current.Type,
+			operation.TypeShell,
+		)
+	}
+
+	}
+	}
+	if state.Result != nil {
+}
+
 	var arguments map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(encoded), &arguments); err != nil {
 	}

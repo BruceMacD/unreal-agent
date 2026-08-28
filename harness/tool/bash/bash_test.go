@@ -8,6 +8,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
 )
 
@@ -49,6 +50,112 @@ func TestTranslatorSubmitsShellOperation(t *testing.T) {
 		t.Fatalf("shell input = %#v, want %#v", state.Input, wantInput)
 	}
 		t.Fatalf("shell configuration = %#v", state)
+	}
+}
+
+func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
+	tests := []struct {
+		name   string
+		status operation.Status
+		state  operation.ShellState
+	}{
+		{
+			name:   "completed",
+			status: operation.StatusCompleted,
+			state: operation.ShellState{
+				Result: &operation.ShellResult{
+				},
+			},
+		},
+		{
+			name:   "awaiting",
+			status: operation.StatusAwaiting,
+		},
+		{
+			name:   "failed",
+			status: operation.StatusFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state, err := json.Marshal(test.state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := translator.TranslateResult("call-1", tool.CallStatus{}, []operation.Operation{{
+				ID:      "operation-1",
+				Type:    operation.TypeShell,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.CallID != "call-1" {
+				t.Fatalf("call ID = %q", result.CallID)
+			}
+			}
+				}
+			}
+		})
+	}
+}
+
+func TestTranslatorTranslatesValidationErrorWithoutOperations(t *testing.T) {
+	ctx := &recordingContext{}
+	status := translator.Translate(ctx, llm.ToolCall{
+		CallID:    "call-1",
+		Arguments: `{"command":42}`,
+	})
+	if status.Error == "" || len(ctx.specs) != 0 {
+		t.Fatalf("status = %#v, submitted specs = %d", status, len(ctx.specs))
+	}
+
+	result, err := translator.TranslateResult("call-1", status, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+	}
+}
+
+func TestTranslatorRejectsInvalidShellOperationResults(t *testing.T) {
+	validState, err := json.Marshal(operation.ShellState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		operations []operation.Operation
+		want       string
+	}{
+		{
+			name: "wrong type",
+			operations: []operation.Operation{{
+			}},
+			want: `has type "other", want "shell"`,
+		},
+		{
+			name: "malformed state",
+			operations: []operation.Operation{{
+				State: []byte(`{`),
+			}},
+			want: "decode Bash operation",
+		},
+		{
+			name: "completed without result",
+			operations: []operation.Operation{{
+				Status: operation.StatusCompleted, State: validState,
+			}},
+			want: "completed operation",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := translator.TranslateResult("call-1", tool.CallStatus{}, test.operations)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
 	}
 }
 

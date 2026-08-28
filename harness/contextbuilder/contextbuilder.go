@@ -1,3 +1,4 @@
+// Package contextbuilder defines I/O-pure, in-memory model request construction.
 package contextbuilder
 
 import (
@@ -27,5 +28,9 @@ type Result struct {
 	Report  Report
 }
 
+// Builder retains model request state without performing I/O.
 type Builder interface {
+	AddReasoning(llm.Reasoning)
+	AddTool(llm.Tool)
+	Build() (Result, error)
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/operation"
 )
 
 type fixedTranslator struct {
@@ -13,6 +14,8 @@ func (translator *fixedTranslator) Translate(Context, llm.ToolCall) CallStatus {
 	return translator.status
 }
 
+func (translator *fixedTranslator) TranslateResult(
+) (llm.ToolResult, error) {
 	}
 	}
 	}

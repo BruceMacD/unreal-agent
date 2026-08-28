@@ -1,3 +1,4 @@
+// between model tool calls and durable operations.
 package tool
 
 import (
