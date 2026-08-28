@@ -130,6 +130,7 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 	}
 }
 
+func TestBuilderPreservesToolResultPayload(t *testing.T) {
 	current := NewBuilder()
 
 	result, err := current.Build()

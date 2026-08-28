@@ -45,7 +45,9 @@ func (current *builder) AddTool(tool llm.Tool) {
 
 func (current *builder) AddToolResult(
 	callID string,
+) {
 		Type: llm.ItemToolResult,
+		Data: llm.ToolResult{CallID: callID, Output: payload},
 	})
 }
 
