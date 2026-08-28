@@ -2,6 +2,7 @@
 package contextbuilder
 
 import (
+	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 

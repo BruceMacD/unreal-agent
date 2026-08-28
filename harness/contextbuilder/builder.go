@@ -1,8 +1,10 @@
 package contextbuilder
 
 import (
+	"encoding/json/v2"
 	"fmt"
 
+	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
@@ -13,7 +15,16 @@ var _ Builder = (*builder)(nil)
 
 }
 
+		return fmt.Errorf(
+		)
+	}
+
+	var text string
+	}
+		Type: llm.ItemMessage,
+		Data: llm.Message{Role: llm.RoleUser, Text: text},
 	})
+	return nil
 }
 
 	current.request.Model = model
