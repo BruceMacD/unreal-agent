@@ -19,3 +19,10 @@ type Dependencies struct {
 type Coordinator interface {
 	Run(context.Context) error
 }
+
+func New(dependencies Dependencies) Coordinator {
+	return &coordinator{
+		dependencies: dependencies,
+		state:        newLoopState(),
+	}
+}
