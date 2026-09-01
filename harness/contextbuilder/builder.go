@@ -27,6 +27,7 @@ var _ Builder = (*builder)(nil)
 	return nil
 }
 
+func (current *builder) SetModel(model llm.Model) {
 	current.request.Model = model
 }
 

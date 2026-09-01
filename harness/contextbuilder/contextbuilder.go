@@ -31,6 +31,7 @@ type Result struct {
 
 // Builder retains model request state without performing I/O.
 type Builder interface {
+	SetModel(llm.Model)
 	AddModelResponse(llm.Response)
 	AddReasoning(llm.Reasoning)
 	AddTool(llm.Tool)

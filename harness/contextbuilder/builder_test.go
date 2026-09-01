@@ -108,6 +108,7 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 	}
 
 	current := NewBuilder()
+	current.SetModel(model)
 	current.AddTool(weather)
 	current.AddReasoning(reasoning)
 	current.AddModelResponse(llm.Response{Output: []llm.Item{{
