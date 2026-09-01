@@ -3,6 +3,7 @@ package tool
 
 import (
 	"encoding/json/jsontext"
+	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
@@ -25,6 +26,8 @@ type Definition struct {
 	Tool     llm.Tool
 	Metadata jsontext.Value
 }
+
+type RegistrationID = uuid.UUID
 
 type Registry interface {
 	Resolve(string) (Translator, bool)

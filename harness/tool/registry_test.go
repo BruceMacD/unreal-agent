@@ -3,6 +3,7 @@ package tool
 import (
 	"reflect"
 	"testing"
+	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"

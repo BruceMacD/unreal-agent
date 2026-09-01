@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
@@ -73,6 +74,7 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 	return decodeResponse(responseBody)
 }
 
+	correlationID := primitives.CorrelationID(uuid.New().String())
 	request := primitives.DefaultRemoteRequest(remoteSource, correlationID, adapter.endpoint)
 	request.Method = http.MethodPost
 	request.Body = body
