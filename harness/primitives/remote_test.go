@@ -34,6 +34,9 @@ func TestDefaultRemoteRequest(t *testing.T) {
 	if request.ResponseIdleTimeout != 30*time.Second {
 		t.Fatalf("response idle timeout = %s", request.ResponseIdleTimeout)
 	}
+	if request.SSE != nil {
+		t.Fatalf("SSE options = %#v", request.SSE)
+	}
 	wantRetryPolicy := RemoteRetryPolicy{
 		InitialBackoff:       2 * time.Second,
 		MaxBackoff:           30 * time.Second,
@@ -55,6 +58,22 @@ func TestNewRemoteHTTPClientOwnsTransport(t *testing.T) {
 	}
 	if _, ok := client.Transport.(*http.Transport); !ok {
 		t.Fatalf("transport type = %T", client.Transport)
+	}
+}
+
+func TestRemoteClientWrapsConfiguredHTTPClient(t *testing.T) {
+	transport := &closeTrackingRemoteTransport{}
+	httpClient := &http.Client{Transport: transport}
+	client := NewRemoteClientWithHTTPClient(httpClient)
+
+	if client.httpClient != httpClient {
+		t.Fatal("remote client copied the configured HTTP client")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if transport.closeCalls.Load() != 1 {
+		t.Fatalf("close idle connections calls = %d, want 1", transport.closeCalls.Load())
 	}
 }
 
@@ -164,6 +183,102 @@ func TestSendRemoteRequestStreamsResponse(t *testing.T) {
 	if last := events[len(events)-1]; last.Type != PrimitiveEventRemoteCompleted ||
 		last.Result != (RemoteCompletedResult{Attempt: 1}) {
 		t.Fatalf("last event = %#v", last)
+	}
+}
+
+func TestSendRemoteRequestFramesSSEResponses(t *testing.T) {
+	body := []byte("data: one\r\n\r\ndata: two\n\n")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		if _, err := writer.Write(body); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	request := DefaultRemoteRequest("operation-1", "remote-1", server.URL)
+	request.SSE = &RemoteSSEOptions{MaxFrameSize: int64(len(body))}
+	events := collectInternalEvents(sendTestRemoteRequest(t, t.Context(), request))
+	outputs := remoteEventsOfType(events, PrimitiveEventRemoteOutput)
+	want := [][]byte{[]byte("data: one"), []byte("data: two")}
+	if len(outputs) != len(want) {
+		t.Fatalf("output events = %#v", outputs)
+	}
+	var offset int64
+	for index, event := range outputs {
+		output := event.Result.(RemoteOutputResult)
+		if output.Attempt != 1 || output.Offset != offset || !bytes.Equal(output.Data, want[index]) {
+			t.Fatalf("output %d = %#v", index, output)
+		}
+		offset += int64(len(output.Data))
+	}
+	if last := events[len(events)-1]; last.Type != PrimitiveEventRemoteCompleted {
+		t.Fatalf("last event = %#v", last)
+	}
+}
+
+func TestSendRemoteRequestKeepsRawOutputForNonSSEResponses(t *testing.T) {
+	body := []byte(`{"ok":true}`)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if _, err := writer.Write(body); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	request := DefaultRemoteRequest("operation-1", "remote-1", server.URL)
+	request.SSE = &RemoteSSEOptions{MaxFrameSize: 1}
+	events := collectInternalEvents(sendTestRemoteRequest(t, t.Context(), request))
+	if output := remoteAttemptOutput(t, events, 1); !bytes.Equal(output, body) {
+		t.Fatalf("output = %q", output)
+	}
+}
+
+func TestSendRemoteRequestPreservesFramedOutputBeforeStreamFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{name: "incomplete event", body: []byte("data: partial")},
+		{name: "complete event and tail", body: []byte("data: complete\n\npartial")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := &trackingRemoteBody{Reader: &terminalRemoteReader{
+				data: test.body,
+				err:  io.ErrUnexpectedEOF,
+			}}
+			client := &RemoteClient{httpClient: &http.Client{Transport: remoteRoundTripFunc(
+				func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": {"text/event-stream"}},
+						Body:       body,
+					}, nil
+				},
+			)}}
+			request := DefaultRemoteRequest("operation-1", "remote-1", "https://example.com")
+			request.SSE = &RemoteSSEOptions{
+				MaxFrameSize:   int64(len(test.body)),
+				FrameDelimiter: SSEFrameDelimiterPassThrough,
+			}
+			request.RetryPolicy = RemoteRetryPolicy{MaxAttempts: 1}
+
+			events := collectInternalEvents(sendRemoteRequest(client, t.Context(), request))
+			assertRemoteEventTypes(t, events, []PrimitiveEventType{
+				PrimitiveEventRemoteResponseStarted,
+				PrimitiveEventRemoteOutput,
+				PrimitiveEventRemoteStreamFailed,
+				PrimitiveEventFailed,
+			})
+			if output := remoteAttemptOutput(t, events, 1); !bytes.Equal(output, test.body) {
+				t.Fatalf("output = %q, want %q", output, test.body)
+			}
+			if !body.closed {
+				t.Fatal("response body was not closed")
+			}
+		})
 	}
 }
 
@@ -655,6 +770,23 @@ func TestSendRemoteRequestRejectsInvalidRequest(t *testing.T) {
 			name:    "response idle timeout",
 			mutate:  func(request *RemoteRequest) { request.ResponseIdleTimeout = 0 },
 			message: "response idle timeout must be positive",
+		},
+		{
+			name: "SSE frame size",
+			mutate: func(request *RemoteRequest) {
+				request.SSE = &RemoteSSEOptions{}
+			},
+			message: "SSE maximum frame size must be positive",
+		},
+		{
+			name: "SSE frame delimiter",
+			mutate: func(request *RemoteRequest) {
+				request.SSE = &RemoteSSEOptions{
+					MaxFrameSize:   1,
+					FrameDelimiter: SSEFrameDelimiter(2),
+				}
+			},
+			message: "invalid SSE frame delimiter mode",
 		},
 		{
 			name:    "attempts",
@@ -1226,10 +1358,36 @@ func (reader remoteErrorReader) Read(buffer []byte) (int, error) {
 	return 0, reader.err
 }
 
+type terminalRemoteReader struct {
+	data []byte
+	err  error
+}
+
+func (reader *terminalRemoteReader) Read(buffer []byte) (int, error) {
+	count := copy(buffer, reader.data)
+	reader.data = reader.data[count:]
+	if len(reader.data) == 0 {
+		return count, reader.err
+	}
+	return count, nil
+}
+
 type remoteRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (roundTrip remoteRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return roundTrip(request)
+}
+
+type closeTrackingRemoteTransport struct {
+	closeCalls atomic.Int32
+}
+
+func (*closeTrackingRemoteTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected request")
+}
+
+func (transport *closeTrackingRemoteTransport) CloseIdleConnections() {
+	transport.closeCalls.Add(1)
 }
 
 func remoteTestClient(body io.ReadCloser) *http.Client {

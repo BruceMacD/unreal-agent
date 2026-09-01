@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"slices"
@@ -30,8 +31,21 @@ type RemoteRequest struct {
 	Headers             map[string][]string
 	Body                []byte
 	ResponseIdleTimeout time.Duration
+	SSE                 *RemoteSSEOptions
 	RetryPolicy         RemoteRetryPolicy
 }
+
+type RemoteSSEOptions struct {
+	MaxFrameSize   int64
+	FrameDelimiter SSEFrameDelimiter
+}
+
+type SSEFrameDelimiter uint8
+
+const (
+	SSEFrameDelimiterStrip SSEFrameDelimiter = iota
+	SSEFrameDelimiterPassThrough
+)
 
 func DefaultRemoteRequest(source SourceID, correlationID CorrelationID, url string) RemoteRequest {
 	return RemoteRequest{
@@ -97,6 +111,10 @@ type RemoteClient struct {
 
 func NewRemoteClient() *RemoteClient {
 	return &RemoteClient{httpClient: newRemoteHTTPClient()}
+}
+
+func NewRemoteClientWithHTTPClient(httpClient *http.Client) *RemoteClient {
+	return &RemoteClient{httpClient: httpClient}
 }
 
 func (client *RemoteClient) Close() error {
@@ -259,6 +277,14 @@ func streamRemoteResponse(
 		return ctx.Err()
 	}
 
+	frameSSE := false
+	if request.SSE != nil {
+		frameSSE = err == nil && mediaType == "text/event-stream"
+	}
+	var sseFramer *remoteSSEFramer
+	if frameSSE {
+		sseFramer = newRemoteSSEFramer(request.SSE.MaxFrameSize, request.SSE.FrameDelimiter)
+	}
 	buffer := make([]byte, IOReadChunkSize)
 	var offset int64
 	idleTimeout.arm()
@@ -269,14 +295,70 @@ func streamRemoteResponse(
 		}
 		idleTimeout.pause()
 		if count > 0 {
+			if frameSSE {
+				frames, frameErr := sseFramer.append(buffer[:count])
+				for _, frame := range frames {
+					if !sendRemoteOutput(ctx, request, events, attempt, frame.offset, frame.data) {
+						_ = response.Body.Close()
+						return ctx.Err()
+					}
+				}
+				if frameErr != nil {
+					return errors.Join(frameErr, response.Body.Close())
+				}
+			} else {
+				if !sendRemoteOutput(
+					ctx,
+					request,
+					events,
+					attempt,
+					offset,
+					append([]byte(nil), buffer[:count]...),
+				) {
+					_ = response.Body.Close()
+					return ctx.Err()
+				}
+				offset += int64(count)
 			}
 		}
 
 		if readErr != nil {
+			if frameSSE {
+				for _, frame := range sseFramer.finish() {
+					if !sendRemoteOutput(ctx, request, events, attempt, frame.offset, frame.data) {
+						_ = response.Body.Close()
+						return ctx.Err()
+					}
+				}
+			}
+			if errors.Is(readErr, io.EOF) {
+				_ = response.Body.Close()
+				return nil
+			}
 			return errors.Join(readErr, response.Body.Close())
 		}
 		idleTimeout.arm()
 	}
+}
+
+func sendRemoteOutput(
+	ctx context.Context,
+	request RemoteRequest,
+	events chan<- PrimitiveEvent,
+	attempt int,
+	offset int64,
+	data []byte,
+) bool {
+	return sendRemoteEvent(ctx, events, PrimitiveEvent{
+		Type:          PrimitiveEventRemoteOutput,
+		Source:        request.Source,
+		CorrelationID: request.CorrelationID,
+		Result: RemoteOutputResult{
+			Attempt: attempt,
+			Offset:  offset,
+			Data:    data,
+		},
+	})
 }
 
 func newRemoteRequestBody(body []byte) io.ReadCloser {
@@ -377,6 +459,15 @@ func prepareRemoteRequest(request RemoteRequest) (*http.Request, error) {
 	}
 	if request.ResponseIdleTimeout <= 0 {
 		return nil, errors.New("send remote request: response idle timeout must be positive")
+	}
+	if request.SSE != nil {
+		if request.SSE.MaxFrameSize <= 0 {
+			return nil, errors.New("send remote request: SSE maximum frame size must be positive")
+		}
+		if request.SSE.FrameDelimiter != SSEFrameDelimiterStrip &&
+			request.SSE.FrameDelimiter != SSEFrameDelimiterPassThrough {
+			return nil, errors.New("send remote request: invalid SSE frame delimiter mode")
+		}
 	}
 	if request.RetryPolicy.MaxAttempts <= 0 {
 		return nil, errors.New("send remote request: maximum attempts must be positive")
