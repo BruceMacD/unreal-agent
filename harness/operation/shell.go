@@ -94,11 +94,19 @@ func NewShellSpec(
 
 func shellOperationState(current Operation) (ShellState, error) {
 	if current.Type != TypeShell {
+		return ShellState{}, fmt.Errorf(
+			"advance shell operation %q: unsupported type %q: %w",
+			current.ID,
+			current.Type,
+			ErrUnsupported,
+		)
 	}
 	if current.Version != VersionShell {
 		return ShellState{}, fmt.Errorf(
+			"advance shell operation %q: unsupported version %d: %w",
 			current.ID,
 			current.Version,
+			ErrUnsupported,
 		)
 	}
 

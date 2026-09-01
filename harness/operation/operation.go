@@ -3,9 +3,12 @@ package operation
 
 import (
 	"encoding/json/jsontext"
+	"errors"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
 )
+
+var ErrUnsupported = errors.New("unsupported operation")
 
 type Type string
 
@@ -41,6 +44,7 @@ type Step struct {
 
 type Manager interface {
 	// Add starts an operation at most once for each ID during the manager's lifetime.
+	// It returns ErrUnsupported when the operation type or version cannot be handled.
 	Add(Operation) error
 	Cancel(ID, string) error
 	Updates() <-chan Operation

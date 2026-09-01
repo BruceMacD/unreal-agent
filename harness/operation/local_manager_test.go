@@ -398,6 +398,9 @@ func TestLocalOperationManagerRejectsInvalidOperations(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
+			if test.name != "terminal" && !errors.Is(err, operation.ErrUnsupported) {
+				t.Fatalf("error = %v, want ErrUnsupported", err)
+			}
 		})
 	}
 

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -271,6 +272,126 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{updated}) {
 		t.Fatalf("saved operations = %#v, want %#v", store.savedOperations, []operation.Operation{updated})
 	}
+	}
+	if len(operations.cancels) != 0 || len(adapter.requests) != 0 {
+		t.Fatalf("unexpected effects: cancels=%v model=%v", operations.cancels, adapter.requests)
+	}
+}
+
+func TestCoordinatorRunDispatchesRestoredNonTerminalOperations(t *testing.T) {
+	store := emptyFakeStore()
+	statuses := []operation.Status{
+		operation.StatusReady,
+		operation.StatusAwaiting,
+		operation.StatusCanceling,
+		operation.StatusCompleted,
+		operation.StatusFailed,
+		operation.StatusCanceled,
+	}
+	for _, status := range statuses {
+			ID: operation.ID(status), Type: operation.TypeShell, Version: 1, Status: status,
+		})
+	}
+	operations := newFakeOperationManager()
+	adapter := &fakeAdapter{}
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+		adapter,
+	)
+
+	err := current.Run(t.Context())
+		t.Fatalf("Run error = %v, want closed inbox error", err)
+	}
+	sort.Slice(operations.adds, func(left, right int) bool {
+		return operations.adds[left].ID < operations.adds[right].ID
+	})
+	want := []operation.Operation{
+		{ID: "awaiting", Type: operation.TypeShell, Version: 1, Status: operation.StatusAwaiting},
+		{ID: "canceling", Type: operation.TypeShell, Version: 1, Status: operation.StatusCanceling},
+		{ID: "ready", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady},
+	}
+	if !reflect.DeepEqual(operations.adds, want) {
+		t.Fatalf("dispatched operations = %#v, want %#v", operations.adds, want)
+	}
+	if len(adapter.requests) != 0 {
+		t.Fatalf("model requests = %#v", adapter.requests)
+	}
+}
+
+func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
+	store := emptyFakeStore()
+	value := operation.Operation{
+		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
+	}
+	operations := newFakeOperationManager()
+	operations.addError = func(operation.Operation) error {
+		return errors.New("dispatch failed")
+	}
+	current := newTestCoordinator(
+		store,
+		operations,
+		contextbuilder.NewBuilder(),
+	)
+
+	err := current.Run(t.Context())
+	if err == nil || err.Error() != `dispatch operation "operation-1": dispatch failed` {
+		t.Fatalf("Run error = %v", err)
+	}
+}
+
+	store := emptyFakeStore()
+		{ID: "unsupported", Type: "remote", Version: 1, Status: operation.StatusReady},
+		{ID: "supported", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady},
+	}
+	operations := newFakeOperationManager()
+	operations.addError = func(value operation.Operation) error {
+		if value.ID == "unsupported" {
+			return fmt.Errorf("manager does not support %q: %w", value.Type, operation.ErrUnsupported)
+		}
+		return nil
+	}
+	current := newTestCoordinator(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+	)
+
+	err := current.Run(t.Context())
+	}
+	if _, ok := current.state.operations["unsupported"]; !ok {
+		t.Fatal("unsupported operation was not retained")
+	}
+}
+
+func TestCoordinatorClonesOperationDataBeforeDispatch(t *testing.T) {
+	operations := newFakeOperationManager()
+	operations.mutateAdds = true
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		operations,
+		contextbuilder.NewBuilder(),
+	)
+	value := current.addOperationToLocalState(operation.Operation{
+		ID:          "operation-1",
+		Type:        operation.TypeShell,
+		Version:     1,
+		Status:      operation.StatusReady,
+		State:       jsontext.Value(`{"state":"original"}`),
+		Idempotency: jsontext.Value(`{"key":"original"}`),
+	})
+
+	if err := current.dispatchOperationsToManager(); err != nil {
+		t.Fatal(err)
+	}
+	stored := current.state.operations[value.ID]
+	if string(stored.State) != `{"state":"original"}` ||
+		string(stored.Idempotency) != `{"key":"original"}` {
+		t.Fatalf("stored operation was mutated: %#v", stored)
+	}
 }
 
 func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.T) {
@@ -311,6 +432,9 @@ func TestCoordinatorRunReturnsOperationStoreErrorAfterUpdatingLocalState(t *test
 	}
 	if !reflect.DeepEqual(current.state.operations[update.ID], update) {
 		t.Fatalf("operation = %#v, want %#v", current.state.operations[update.ID], update)
+	}
+	if len(operations.adds) != 0 {
+		t.Fatalf("operations dispatched before store commit = %#v", operations.adds)
 	}
 }
 
@@ -517,6 +641,14 @@ func newFakeOperationManager() *fakeOperationManager {
 
 func (manager *fakeOperationManager) Add(value operation.Operation) error {
 	manager.adds = append(manager.adds, value)
+	if manager.mutateAdds {
+		value.State[0] = '!'
+		value.Idempotency[0] = '!'
+	}
+	if manager.addError != nil {
+		return manager.addError(value)
+	}
+	return nil
 }
 
 	manager.cancels = append(manager.cancels, id)

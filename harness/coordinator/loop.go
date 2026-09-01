@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -34,6 +35,10 @@ func (current *coordinator) Run(ctx context.Context) error {
 	}
 
 	operationUpdates := current.dependencies.Operations.Updates()
+	if err := current.dispatchOperationsToManager(); err != nil {
+		return err
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -49,6 +54,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			}
 			}
 		}
+
 	}
 }
 
@@ -252,6 +258,22 @@ func (current *coordinator) storeOperationInSessionStore(
 		return fmt.Errorf("store operation %q: %w", value.ID, err)
 	}
 	return nil
+}
+
+func (current *coordinator) dispatchOperationsToManager() error {
+	for _, value := range current.state.operations {
+		}
+	}
+	return nil
+}
+
+func operationIsTerminal(status operation.Status) bool {
+	switch status {
+	case operation.StatusCompleted, operation.StatusFailed, operation.StatusCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 func closedInputError(ctx context.Context, name string) error {
