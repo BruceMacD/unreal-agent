@@ -40,6 +40,7 @@ type Step struct {
 }
 
 type Manager interface {
+	// Add starts an operation at most once for each ID during the manager's lifetime.
 	Add(Operation) error
 	Cancel(ID, string) error
 	Updates() <-chan Operation

@@ -231,6 +231,59 @@ func TestLocalOperationManagerCancelIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLocalOperationManagerAddIsIdempotent(t *testing.T) {
+	manager := operation.NewLocalOperationManager(t.Context())
+	current := newShellOperation(t, "local-add-idempotent", operation.ShellInput{
+		Shell:   testShellPath,
+		Command: "exec sleep 30",
+	}, t.TempDir(), 64)
+
+	if err := manager.Add(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Add(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Cancel(current.ID, "finish test operation"); err != nil {
+		t.Fatal(err)
+	}
+	if completed := receiveTerminalOperation(t, manager.Updates(), current.ID); completed.Status != operation.StatusCanceled {
+		t.Fatalf("status = %q, want %q", completed.Status, operation.StatusCanceled)
+	}
+
+	replacement := newShellOperation(t, current.ID, operation.ShellInput{
+		Shell:   testShellPath,
+		Command: "printf duplicate",
+	}, t.TempDir(), 64)
+	if err := manager.Add(replacement); err != nil {
+		t.Fatal(err)
+	}
+	barrier := newShellOperation(t, "local-add-idempotent-barrier", operation.ShellInput{
+		Shell:   testShellPath,
+		Command: "true",
+	}, t.TempDir(), 64)
+	if err := manager.Add(barrier); err != nil {
+		t.Fatal(err)
+	}
+	timer := time.NewTimer(15 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case update := <-manager.Updates():
+			if update.ID == current.ID {
+				t.Fatalf("duplicate operation update = %#v", update)
+			}
+			if update.ID == barrier.ID && update.Status == operation.StatusCompleted {
+				return
+			}
+		case <-timer.C:
+			t.Fatal("timed out waiting for barrier operation")
+		case <-t.Context().Done():
+			t.Fatal(t.Context().Err())
+		}
+	}
+}
+
 func TestLocalOperationManagerShutdownCancelsActiveShellOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -351,6 +404,8 @@ func TestLocalOperationManagerRejectsInvalidOperations(t *testing.T) {
 	if err := manager.Add(valid); err != nil {
 		t.Fatal(err)
 	}
+	if err := manager.Add(valid); err != nil {
+		t.Fatal(err)
 	}
 	if err := manager.Cancel("unknown", "test"); err != nil {
 		t.Fatal(err)

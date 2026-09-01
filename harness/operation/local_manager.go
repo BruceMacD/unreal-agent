@@ -74,6 +74,7 @@ func (manager *LocalOperationManager) Updates() <-chan Operation {
 func (manager *LocalOperationManager) run() {
 	defer close(manager.updates)
 	operations := make(map[ID]*localRunningOperation)
+	accepted := make(map[ID]struct{})
 	activePrimitives := 0
 
 	for {
@@ -90,12 +91,15 @@ func (manager *LocalOperationManager) run() {
 			manager.pendingUpdates = manager.pendingUpdates[1:]
 
 		case request := <-manager.adds:
+			if _, exists := accepted[request.operation.ID]; exists {
+				request.result <- nil
 				continue
 			}
 			if err != nil {
 				request.result <- err
 				continue
 			}
+			accepted[request.operation.ID] = struct{}{}
 			operations[request.operation.ID] = current
 			activePrimitives += manager.acceptLocalStep(operations, current, step)
 			request.result <- nil
