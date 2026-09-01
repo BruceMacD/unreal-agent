@@ -35,8 +35,37 @@ func (current *coordinator) Run(ctx context.Context) error {
 
 	operationUpdates := current.dependencies.Operations.Updates()
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+			if !open {
+			}
+				return err
+			}
+
+			if !open {
+				return closedInputError(ctx, "operation updates")
+			}
+			}
 		}
 	}
+}
+
+	item, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemInput,
+	})
+	if err != nil {
+		return err
+	}
+}
+
+func (current *coordinator) handleOperationUpdate(
+	ctx context.Context,
+	update operation.Operation,
+) error {
+	update = current.addOperationToLocalState(update)
+	return current.storeOperationInSessionStore(ctx, update)
 }
 
 func (current *coordinator) restore(ctx context.Context) error {
@@ -68,23 +97,42 @@ func (current *coordinator) loadHistory(ctx context.Context) error {
 	}
 }
 
+func (current *coordinator) addItemToLocalState(
+	item sessionstore.Item,
+) (sessionstore.Item, error) {
 	switch item.Kind {
 	case sessionstore.ItemFork:
 		if _, ok := item.Data.(sessionstore.Fork); !ok {
+			return sessionstore.Item{}, fmt.Errorf(
+				"fork data is %T, want sessionstore.Fork",
+				item.Data,
+			)
 		}
 
 	case sessionstore.ItemInput:
 		if !ok {
+			return sessionstore.Item{}, fmt.Errorf(
+				item.Data,
+			)
 		}
+				return sessionstore.Item{}, fmt.Errorf(
+					"add input %q to context: %w",
+					err,
+				)
 			}
 		}
 
 	case sessionstore.ItemTurn:
+			return sessionstore.Item{}, fmt.Errorf(
+				"turn data is %T, want session.Turn",
+				item.Data,
+			)
 		}
 
 	case sessionstore.ItemModelResponse:
 		response, ok := item.Data.(sessionstore.ModelResponse)
 		if !ok {
+			return sessionstore.Item{}, fmt.Errorf(
 				"model response data is %T, want sessionstore.ModelResponse",
 				item.Data,
 			)
@@ -95,17 +143,22 @@ func (current *coordinator) loadHistory(ctx context.Context) error {
 	case sessionstore.ItemToolCallStatus:
 		status, ok := item.Data.(sessionstore.ToolCallStatus)
 		if !ok {
+			return sessionstore.Item{}, fmt.Errorf(
 				"tool-call status data is %T, want sessionstore.ToolCallStatus",
 				item.Data,
 			)
 		}
+			return sessionstore.Item{}, err
 		}
 
 	default:
+		return sessionstore.Item{}, fmt.Errorf("unsupported item kind %q", item.Kind)
 	}
 
 }
 
+	status sessionstore.ToolCallStatus,
+) error {
 	if !exists {
 		return nil
 	}
@@ -132,16 +185,71 @@ func (current *coordinator) loadHistory(ctx context.Context) error {
 	return nil
 }
 
+func (current *coordinator) addOperationToLocalState(
+	value operation.Operation,
+) operation.Operation {
 	current.state.operations[value.ID] = value
+	return current.state.operations[value.ID]
 }
 
+func (current *coordinator) storeItemInSessionStore(
 	ctx context.Context,
+	item sessionstore.Item,
 ) error {
-		}
-		}
+	switch item.Kind {
+	case sessionstore.ItemInput:
+		if err := current.dependencies.Sessions.AppendInput(
+			ctx,
+			current.dependencies.SessionID,
+		); err != nil {
 		}
 
+	case sessionstore.ItemTurn:
+		turn := item.Data.(session.Turn)
+		if err := current.dependencies.Sessions.AppendTurn(
+			ctx,
+			current.dependencies.SessionID,
+			turn,
+		); err != nil {
+			return fmt.Errorf("store turn %q: %w", turn.ID, err)
 		}
+
+	case sessionstore.ItemModelResponse:
+		response := item.Data.(sessionstore.ModelResponse)
+		if err := current.dependencies.Sessions.AppendModelResponse(
+			ctx,
+			current.dependencies.SessionID,
+			response,
+		); err != nil {
+			return fmt.Errorf("store turn %q response: %w", response.TurnID, err)
+		}
+
+	case sessionstore.ItemToolCallStatus:
+		status := item.Data.(sessionstore.ToolCallStatus)
+		if err := current.dependencies.Sessions.AppendToolCallStatus(
+			ctx,
+			current.dependencies.SessionID,
+			status,
+		); err != nil {
+			return fmt.Errorf("store tool call %q status: %w", status.CallID, err)
+		}
+
+	default:
+		return fmt.Errorf("unsupported local item kind %q", item.Kind)
+	}
+	return nil
+}
+
+func (current *coordinator) storeOperationInSessionStore(
+	ctx context.Context,
+	value operation.Operation,
+) error {
+	if err := current.dependencies.Sessions.SaveOperation(
+		ctx,
+		current.dependencies.SessionID,
+		value,
+	); err != nil {
+		return fmt.Errorf("store operation %q: %w", value.ID, err)
 	}
 	return nil
 }

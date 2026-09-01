@@ -240,6 +240,7 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
+	}
 }
 
 	store := emptyFakeStore()
@@ -266,6 +267,91 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	}
 	if !reflect.DeepEqual(current.state.operations[initial.ID], updated) {
 		t.Fatalf("operation = %#v, want %#v", current.state.operations[initial.ID], updated)
+	}
+	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{updated}) {
+		t.Fatalf("saved operations = %#v, want %#v", store.savedOperations, []operation.Operation{updated})
+	}
+}
+
+func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.T) {
+	store := emptyFakeStore()
+	store.appendInputErr = errors.New("disk unavailable")
+	event := externalEvent(t, 1, "input-1", "hello")
+	current := newTestCoordinator(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+	)
+
+	err := current.Run(t.Context())
+	if err == nil || err.Error() != `store input "input-1": disk unavailable` {
+		t.Fatalf("Run error = %v", err)
+	}
+}
+
+func TestCoordinatorRunReturnsOperationStoreErrorAfterUpdatingLocalState(t *testing.T) {
+	store := emptyFakeStore()
+	store.saveOperationErr = errors.New("disk unavailable")
+	operations := newFakeOperationManager()
+	update := operation.Operation{
+		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusAwaiting,
+	}
+	operations.updates <- update
+	current := newTestCoordinator(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+	)
+
+	err := current.Run(t.Context())
+	if err == nil || err.Error() != `store operation "operation-1": disk unavailable` {
+		t.Fatalf("Run error = %v", err)
+	}
+	if !reflect.DeepEqual(current.state.operations[update.ID], update) {
+		t.Fatalf("operation = %#v, want %#v", current.state.operations[update.ID], update)
+	}
+}
+
+func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
+	store := emptyFakeStore()
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+	)
+	event := externalEvent(t, 1, "input-1", "hello")
+	response := sessionstore.ModelResponse{
+		TurnID:   turn.ID,
+		Response: llm.Response{ID: "response-1"},
+	}
+	value := operation.Operation{
+		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
+	}
+	current.addOperationToLocalState(value)
+	status := sessionstore.ToolCallStatus{
+	}
+	items := []sessionstore.Item{
+		{Kind: sessionstore.ItemInput, Data: event},
+		{Kind: sessionstore.ItemTurn, Data: turn},
+		{Kind: sessionstore.ItemModelResponse, Data: response},
+		{Kind: sessionstore.ItemToolCallStatus, Data: status},
+	}
+	for _, item := range items {
+		if err := current.storeItemInSessionStore(t.Context(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+		!reflect.DeepEqual(store.appendedTurns, []session.Turn{turn}) ||
+		!reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{response}) ||
+		t.Fatalf("stored items: inputs=%#v turns=%#v responses=%#v statuses=%#v",
+			store.appendedInputs,
+			store.appendedTurns,
+			store.appendedResponses,
+			store.appendedStatuses,
+		)
 	}
 }
 
@@ -342,7 +428,10 @@ type itemRequest struct {
 }
 
 type fakeStore struct {
+}
+
 func (store *fakeStore) Create(context.Context, session.ID) (sessionstore.Snapshot, error) {
+	store.unexpectedMutations = append(store.unexpectedMutations, "create")
 	return sessionstore.Snapshot{}, errors.New("unexpected create")
 }
 
@@ -369,18 +458,35 @@ func (store *fakeStore) Items(
 	return sessionstore.Page{Items: items, NextAfter: next, More: end < len(store.items)}, nil
 }
 
+	return store.appendInputErr
 }
 
+func (store *fakeStore) AppendTurn(_ context.Context, _ session.ID, turn session.Turn) error {
+	store.appendedTurns = append(store.appendedTurns, turn)
 }
 
 func (store *fakeStore) AppendModelResponse(
+	_ context.Context,
+	_ session.ID,
+	response sessionstore.ModelResponse,
 ) error {
+	store.appendedResponses = append(store.appendedResponses, response)
 }
 
 func (store *fakeStore) AppendToolCallStatus(
+	_ context.Context,
+	_ session.ID,
+	status sessionstore.ToolCallStatus,
 ) error {
 }
 
+func (store *fakeStore) SaveOperation(
+	_ context.Context,
+	_ session.ID,
+	value operation.Operation,
+) error {
+	store.savedOperations = append(store.savedOperations, value)
+	return store.saveOperationErr
 }
 
 func (store *fakeStore) Resume(context.Context, session.ID) (sessionstore.ResumeState, error) {
@@ -393,6 +499,7 @@ func (store *fakeStore) Fork(
 	session.ID,
 	session.TurnID,
 ) (sessionstore.Snapshot, error) {
+	store.unexpectedMutations = append(store.unexpectedMutations, "fork")
 	return sessionstore.Snapshot{}, errors.New("unexpected fork")
 }
 
