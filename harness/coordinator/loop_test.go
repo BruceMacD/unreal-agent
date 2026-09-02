@@ -301,6 +301,7 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 		CallID: call.CallID,
 		Status: tool.CallStatus{Error: "invalid arguments"},
 	}
+	if err := current.addToolResultToLocalState(status); err != nil {
 		t.Fatal(err)
 	}
 
@@ -428,6 +429,133 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	}
 	if len(operations.cancels) != 0 || len(adapter.requests) != 0 {
 		t.Fatalf("unexpected effects: cancels=%v model=%v", operations.cancels, adapter.requests)
+	}
+}
+
+func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.T) {
+	store := emptyFakeStore()
+	builder := contextbuilder.NewBuilder()
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		builder,
+		registry,
+	)
+	if _, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemModelResponse,
+		Data: sessionstore.ModelResponse{
+			TurnID: "turn-1",
+			Response: llm.Response{Output: []llm.Item{{
+				Type: llm.ItemToolCall,
+				Data: call,
+			}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	operations := []operation.Operation{
+		{ID: "operation-1", Status: operation.StatusReady},
+		{ID: "operation-2", Status: operation.StatusAwaiting},
+	}
+	for _, value := range operations {
+		current.addOperationToLocalState(value)
+	}
+	status := sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+		Status: tool.CallStatus{WaitingFor: []operation.ID{
+			operations[0].ID,
+			operations[1].ID,
+		}},
+	}
+	if _, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+		Data: status,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	first := operations[0]
+	first.Status = operation.StatusCompleted
+	if err := current.handleOperationUpdate(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+		t.Fatal(err)
+	}
+	key := toolCallKey{turnID: status.TurnID, callID: status.CallID}
+	if _, exists := current.state.toolCalls[key]; !exists {
+		t.Fatal("tool call was removed before every operation became terminal")
+	}
+
+	second := operations[1]
+	second.Status = operation.StatusFailed
+	if err := current.handleOperationUpdate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+		t.Fatal(err)
+	}
+	if _, exists := current.state.toolCalls[key]; exists {
+		t.Fatal("completed tool call remains in local state")
+	}
+	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{first, second}) {
+		t.Fatalf("saved operations = %#v, want %#v", store.savedOperations, []operation.Operation{first, second})
+	}
+	built, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(built.Request.Input, want) {
+		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
+	}
+}
+
+func TestCoordinatorDoesNotCompleteToolCallBeforeOperationIsStored(t *testing.T) {
+	store := emptyFakeStore()
+	store.saveOperationErr = errors.New("disk unavailable")
+	builder := contextbuilder.NewBuilder()
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		builder,
+		registry,
+	)
+	current.addToolCallsToLocalState(sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: call,
+		}}},
+	})
+	value := operation.Operation{ID: "operation-1", Status: operation.StatusReady}
+	current.addOperationToLocalState(value)
+	status := sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+		Status: tool.CallStatus{WaitingFor: []operation.ID{value.ID}},
+	}
+	if _, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+		Data: status,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	value.Status = operation.StatusCompleted
+	err := current.handleOperationUpdate(t.Context(), value)
+	if err == nil || err.Error() != `store operation "operation-1": disk unavailable` {
+		t.Fatalf("handle operation update error = %v", err)
+	}
+	if _, exists := current.state.toolCalls[toolCallKey{
+		turnID: status.TurnID,
+		callID: status.CallID,
+	}]; !exists {
+		t.Fatal("tool call was removed before its operation was stored")
+	}
+	built, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+		t.Fatalf("tool results = %#v, want only the initial result", built.Request.Input)
 	}
 }
 

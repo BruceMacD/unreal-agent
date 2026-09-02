@@ -65,6 +65,8 @@ func (current *coordinator) Run(ctx context.Context) error {
 			}
 		}
 
+			return err
+		}
 	}
 }
 
@@ -166,6 +168,7 @@ func (current *coordinator) addItemToLocalState(
 			)
 		}
 		current.addToolCallOperationsToLocalState(status)
+		if err := current.addToolResultToLocalState(status); err != nil {
 			return sessionstore.Item{}, err
 		}
 
@@ -228,6 +231,7 @@ func (current *coordinator) toolCallOperationsAreTerminal(
 	return true
 }
 
+func (current *coordinator) addToolResultToLocalState(
 	status sessionstore.ToolCallStatus,
 ) error {
 	call, exists := current.state.toolCalls[toolCallKey{
@@ -261,6 +265,7 @@ func (current *coordinator) toolCallOperationsAreTerminal(
 		status.CallID,
 		result.Output,
 	)
+	}
 	return nil
 }
 
@@ -269,6 +274,12 @@ func (current *coordinator) addOperationToLocalState(
 ) operation.Operation {
 	current.state.operations[value.ID] = value
 	return current.state.operations[value.ID]
+}
+
+			continue
+		}
+		}
+	}
 }
 
 func (current *coordinator) storeItemInSessionStore(
