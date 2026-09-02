@@ -222,6 +222,40 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
+	builder := contextbuilder.NewBuilder()
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		newFakeOperationManager(),
+		builder,
+		registry,
+	)
+	current.addToolCallsToLocalState(sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: call,
+		}}},
+	})
+
+	status := sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+		Status: tool.CallStatus{Error: "invalid arguments"},
+	}
+		t.Fatal(err)
+	}
+
+	built, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+		Type: llm.ItemToolResult,
+	if !reflect.DeepEqual(built.Request.Input, want) {
+		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
+	}
+}
+
 	}
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{

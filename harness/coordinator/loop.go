@@ -197,9 +197,14 @@ func (current *coordinator) addToolCallsToLocalState(response sessionstore.Model
 
 	status sessionstore.ToolCallStatus,
 ) error {
+	call, exists := current.state.toolCalls[toolCallKey{
+		turnID: status.TurnID,
+		callID: status.CallID,
+	}]
 	if !exists {
 		return nil
 	}
+	translator, exists := current.dependencies.Tools.Resolve(call.toolCall.Name)
 	if !exists {
 		return nil
 	}
