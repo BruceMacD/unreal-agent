@@ -132,6 +132,7 @@ func (head *sessionHead) appendToolCallStatus(
 	}
 	key := toolCallStatusKey{turnID: status.TurnID, callID: status.CallID}
 	if _, exists := head.toolCallStatuses[key]; exists {
+		return head.appendItem(sessionstore.ItemToolCallStatus, status, recordedAt), nil
 	}
 	seen := make(map[operation.ID]struct{}, len(operations))
 	for index, value := range operations {

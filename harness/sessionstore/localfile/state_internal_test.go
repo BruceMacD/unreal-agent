@@ -177,6 +177,22 @@ func TestStatusOperationReferences(t *testing.T) {
 	}
 }
 
+func TestRepeatedToolCallStatusAddsItem(t *testing.T) {
+	state := stateWithStatus(t)
+	status := validStatus("turn-1", "call-1", "operation-1")
+	operations := slices.Clone(state.Operations)
+
+	if err := state.appendToolCallStatus(status, nil, stateUpdatedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Items) != 3 || !reflect.DeepEqual(state.Items[2].Data, status) {
+		t.Fatalf("items = %#v", state.Items)
+	}
+	if !reflect.DeepEqual(state.Operations, operations) {
+		t.Fatalf("operations = %#v, want %#v", state.Operations, operations)
+	}
+}
+
 func TestRejectedStateTransitionsDoNotMutateState(t *testing.T) {
 	tests := []struct {
 		name  string

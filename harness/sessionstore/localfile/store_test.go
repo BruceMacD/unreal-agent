@@ -223,6 +223,36 @@ func TestStoreAppendsJSONLRecords(t *testing.T) {
 	}
 }
 
+func TestStorePersistsRepeatedToolCallStatuses(t *testing.T) {
+	directory := t.TempDir()
+	store := newStore(t, directory)
+	createSessionWithTurn(t, store, "session-1", "turn-1", "")
+	initial := operation.Operation{
+		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
+	}
+		t.Fatal(err)
+	}
+	completed := initial
+	completed.Status = operation.StatusCompleted
+	if err := store.SaveOperation(t.Context(), "session-1", completed); err != nil {
+		t.Fatal(err)
+	}
+		t.Fatal(err)
+	}
+
+	reopened := newStore(t, directory)
+	assertStoredItemKinds(t, reopened, "session-1",
+		sessionstore.ItemTurn,
+		sessionstore.ItemToolCallStatus,
+		sessionstore.ItemToolCallStatus,
+	)
+	resume, err := reopened.Resume(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	}
+}
+
 func TestReopenedStoreContinuesFromDerivedWriteState(t *testing.T) {
 	directory := t.TempDir()
 	store := newStore(t, directory)
