@@ -161,6 +161,67 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 }
 
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		registry,
+	)
+	for _, response := range []sessionstore.ModelResponse{
+		{
+			TurnID: "turn-1",
+			Response: llm.Response{Output: []llm.Item{
+				{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleAssistant, Text: "working"}},
+				{Type: llm.ItemToolCall, Data: first},
+			}},
+		},
+		{
+			TurnID: "turn-2",
+			Response: llm.Response{Output: []llm.Item{
+				{Type: llm.ItemToolCall, Data: second},
+			}},
+		},
+	} {
+		if _, err := current.addItemToLocalState(sessionstore.Item{
+			Kind: sessionstore.ItemModelResponse,
+			Data: response,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := map[toolCallKey]toolCallState{
+		{turnID: "turn-1", callID: first.CallID}: {
+			toolCall: first, operations: map[operation.ID]struct{}{},
+		},
+		{turnID: "turn-2", callID: second.CallID}: {
+			toolCall: second, operations: map[operation.ID]struct{}{},
+		},
+	}
+	if !reflect.DeepEqual(current.state.toolCalls, want) {
+		t.Fatalf("tool calls = %#v, want %#v", current.state.toolCalls, want)
+	}
+
+	if _, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+		Data: sessionstore.ToolCallStatus{
+			TurnID: "turn-1",
+			CallID: first.CallID,
+			Status: tool.CallStatus{Error: "invalid arguments"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want = map[toolCallKey]toolCallState{
+		{turnID: "turn-2", callID: second.CallID}: {
+			toolCall: second, operations: map[operation.ID]struct{}{},
+		},
+	}
+	if !reflect.DeepEqual(current.state.toolCalls, want) {
+		t.Fatalf("tool calls = %#v, want %#v", current.state.toolCalls, want)
+	}
+}
+
 	}
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{

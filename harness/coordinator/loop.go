@@ -22,6 +22,16 @@ type coordinator struct {
 type loopState struct {
 }
 
+type toolCallState struct {
+	toolCall   llm.ToolCall
+	operations map[operation.ID]struct{}
+}
+
+type toolCallKey struct {
+	turnID session.TurnID
+	callID string
+}
+
 var _ Coordinator = (*coordinator)(nil)
 
 func newLoopState() loopState {
@@ -145,6 +155,7 @@ func (current *coordinator) addItemToLocalState(
 		}
 		// The complete output includes messages, reasoning, and tool calls.
 		current.dependencies.ContextBuilder.AddModelResponse(response.Response)
+		current.addToolCallsToLocalState(response)
 
 	case sessionstore.ItemToolCallStatus:
 		status, ok := item.Data.(sessionstore.ToolCallStatus)
@@ -161,6 +172,27 @@ func (current *coordinator) addItemToLocalState(
 		return sessionstore.Item{}, fmt.Errorf("unsupported item kind %q", item.Kind)
 	}
 
+}
+
+func (current *coordinator) addToolCallsToLocalState(response sessionstore.ModelResponse) {
+	for _, output := range response.Response.Output {
+		if output.Type != llm.ItemToolCall {
+			continue
+		}
+		call := output.Data.(llm.ToolCall)
+		current.state.toolCalls[toolCallKey{
+			turnID: response.TurnID,
+			callID: call.CallID,
+		}] = toolCallState{
+			toolCall:   call,
+			operations: make(map[operation.ID]struct{}),
+		}
+	}
+}
+
+	turnID session.TurnID,
+	callID string,
+) {
 }
 
 	status sessionstore.ToolCallStatus,
