@@ -165,6 +165,7 @@ func (current *coordinator) addItemToLocalState(
 				item.Data,
 			)
 		}
+		current.addToolCallOperationsToLocalState(status)
 			return sessionstore.Item{}, err
 		}
 
@@ -190,9 +191,41 @@ func (current *coordinator) addToolCallsToLocalState(response sessionstore.Model
 	}
 }
 
+func (current *coordinator) addToolCallOperationsToLocalState(
+	status sessionstore.ToolCallStatus,
+) {
+	call, exists := current.state.toolCalls[toolCallKey{
+		turnID: status.TurnID,
+		callID: status.CallID,
+	}]
+	if !exists {
+		return
+	}
+	for _, id := range status.Status.WaitingFor {
+		call.operations[id] = struct{}{}
+	}
+}
+
 	turnID session.TurnID,
 	callID string,
 ) {
+}
+
+func (current *coordinator) toolCallOperationsAreTerminal(
+	turnID session.TurnID,
+	callID string,
+) bool {
+	call := current.state.toolCalls[toolCallKey{
+		turnID: turnID,
+		callID: callID,
+	}]
+	for id := range call.operations {
+		value, exists := current.state.operations[id]
+		if !exists || !operationIsTerminal(value.Status) {
+			return false
+		}
+	}
+	return true
 }
 
 	status sessionstore.ToolCallStatus,
@@ -211,6 +244,9 @@ func (current *coordinator) addToolCallsToLocalState(response sessionstore.Model
 
 	operations := make([]operation.Operation, 0, len(status.Status.WaitingFor))
 	for _, id := range status.Status.WaitingFor {
+		if _, exists := call.operations[id]; !exists {
+			return nil
+		}
 		value, exists := current.state.operations[id]
 		if !exists {
 			return nil

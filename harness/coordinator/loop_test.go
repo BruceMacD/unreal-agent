@@ -161,6 +161,7 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 }
 
+func TestCoordinatorTracksToolCalls(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
 		newFakeOperationManager(),
@@ -219,6 +220,63 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 	if !reflect.DeepEqual(current.state.toolCalls, want) {
 		t.Fatalf("tool calls = %#v, want %#v", current.state.toolCalls, want)
+	}
+
+	waitingFor := []operation.ID{"operation-1", "operation-2"}
+	if _, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+		Data: sessionstore.ToolCallStatus{
+			TurnID: "turn-2",
+			CallID: second.CallID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want = map[toolCallKey]toolCallState{
+		{turnID: "turn-2", callID: second.CallID}: {
+			toolCall: second,
+			operations: map[operation.ID]struct{}{
+				waitingFor[0]: {},
+				waitingFor[1]: {},
+			},
+		},
+	}
+	if !reflect.DeepEqual(current.state.toolCalls, want) {
+		t.Fatalf("tool calls = %#v, want %#v", current.state.toolCalls, want)
+	}
+}
+
+func TestCoordinatorToolCallOperationsAreTerminal(t *testing.T) {
+	current := &coordinator{state: newLoopState()}
+	if !current.toolCallOperationsAreTerminal("missing-turn", "missing-call") {
+		t.Fatal("tool call without operations was not recognized as terminal")
+	}
+
+	key := toolCallKey{turnID: "turn-1", callID: "call-1"}
+	current.state.toolCalls[key] = toolCallState{
+		operations: map[operation.ID]struct{}{
+			"completed": {},
+			"failed":    {},
+			"canceled":  {},
+		},
+	}
+	for id, status := range map[operation.ID]operation.Status{
+		"completed": operation.StatusCompleted,
+		"failed":    operation.StatusFailed,
+		"canceled":  operation.StatusCanceled,
+	} {
+		current.addOperationToLocalState(operation.Operation{ID: id, Status: status})
+	}
+
+	if !current.toolCallOperationsAreTerminal(key.turnID, key.callID) {
+		t.Fatal("terminal operations were not recognized")
+	}
+
+	current.addOperationToLocalState(operation.Operation{
+		ID: "failed", Status: operation.StatusAwaiting,
+	})
+	if current.toolCallOperationsAreTerminal(key.turnID, key.callID) {
+		t.Fatal("non-terminal operation was recognized as terminal")
 	}
 }
 
