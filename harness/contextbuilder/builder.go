@@ -39,6 +39,9 @@ func (current *builder) SetModel(model llm.Model) {
 	current.request.Model = model
 }
 
+func (current *builder) SetSystemPrompt(prompt string) {
+}
+
 func (current *builder) AddModelResponse(response llm.Response) {
 }
 

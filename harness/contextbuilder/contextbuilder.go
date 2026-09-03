@@ -33,6 +33,7 @@ type Result struct {
 type Builder interface {
 	AddExternalInput(inbox.Input) error
 	SetModel(llm.Model)
+	SetSystemPrompt(string)
 	AddModelResponse(llm.Response)
 	AddReasoning(llm.Reasoning)
 	AddTool(llm.Tool)

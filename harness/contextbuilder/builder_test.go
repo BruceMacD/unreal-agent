@@ -165,3 +165,27 @@ func TestBuilderAppendsValidationErrorToolResult(t *testing.T) {
 
 	}
 }
+
+	payload, err := json.Marshal("hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := NewBuilder()
+	current.SetSystemPrompt("Be concise.")
+	if err := current.AddExternalInput(inbox.Input{
+		ID: "input-1", Kind: inbox.InputExternal, Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := current.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []llm.Item{
+		{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "hello"}},
+	}
+	if !reflect.DeepEqual(result.Request.Input, want) {
+		t.Fatalf("input = %#v, want %#v", result.Request.Input, want)
+	}
+}
