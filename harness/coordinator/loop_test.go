@@ -514,6 +514,112 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	}
 }
 
+func TestCoordinatorHandlesModelResponseBeforeSchedulingToolCalls(t *testing.T) {
+	spec, err := operation.NewValueSpec(jsontext.Value(`{"value":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{ID: "response-1", Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`},
+		}}},
+	}
+	store := emptyFakeStore()
+	storedBeforeTranslation := false
+	translator := &submittingTranslator{
+		specs: []operation.Spec{spec},
+		onTranslate: func() {
+			storedBeforeTranslation = reflect.DeepEqual(
+				store.appendedResponses,
+				[]sessionstore.ModelResponse{response},
+			)
+		},
+	}
+	operations := newFakeOperationManager()
+	current := newTestCoordinator(
+		store,
+		operations,
+		contextbuilder.NewBuilder(),
+	)
+
+		t.Fatal(err)
+	}
+	if !storedBeforeTranslation {
+		t.Fatal("tool call was translated before its model response was stored")
+	}
+	if len(store.appendedStatuses) != 1 || len(store.appendedStatuses[0].Operations) != 1 {
+		t.Fatalf("appended statuses = %#v", store.appendedStatuses)
+	}
+	if len(operations.adds) != 0 {
+		t.Fatalf("handler dispatched operations = %#v", operations.adds)
+	}
+}
+
+func TestCoordinatorDoesNotScheduleToolCallsWhenModelResponseStoreFails(t *testing.T) {
+	store := emptyFakeStore()
+	store.appendModelResponseErr = errors.New("disk unavailable")
+	translator := &submittingTranslator{}
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+	)
+	response := sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`},
+		}}},
+	}
+
+	if err == nil || err.Error() != `store turn "turn-1" response: disk unavailable` {
+		t.Fatalf("handle model response error = %v", err)
+	}
+	if !reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{response}) {
+		t.Fatalf("appended responses = %#v", store.appendedResponses)
+	}
+	if len(translator.calls) != 0 || len(store.appendedStatuses) != 0 ||
+		len(current.state.operations) != 0 {
+		t.Fatalf(
+			"scheduled after response store failure: calls=%#v statuses=%#v operations=%#v",
+			translator.calls,
+			store.appendedStatuses,
+			current.state.operations,
+		)
+	}
+}
+
+func TestCoordinatorHandlesModelResponseWithoutToolCalls(t *testing.T) {
+	store := emptyFakeStore()
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+	)
+	response := sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemMessage,
+			Data: llm.Message{Role: llm.RoleAssistant, Text: "done"},
+		}}},
+	}
+
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{response}) ||
+		len(store.appendedStatuses) != 0 || len(current.state.operations) != 0 {
+		t.Fatalf(
+			"response effects: responses=%#v statuses=%#v operations=%#v",
+			store.appendedResponses,
+			store.appendedStatuses,
+			current.state.operations,
+		)
+	}
+}
+
 func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.T) {
 	firstSpec, err := operation.NewValueSpec(jsontext.Value(`{"value":1}`))
 	if err != nil {
@@ -1053,6 +1159,9 @@ func (testTranslator) TranslateResult(
 }
 
 type submittingTranslator struct {
+	specs       []operation.Spec
+	calls       []llm.ToolCall
+	onTranslate func()
 }
 
 func (translator *submittingTranslator) Translate(
@@ -1060,6 +1169,9 @@ func (translator *submittingTranslator) Translate(
 	call llm.ToolCall,
 ) tool.CallStatus {
 	translator.calls = append(translator.calls, call)
+	if translator.onTranslate != nil {
+		translator.onTranslate()
+	}
 	status := tool.CallStatus{WaitingFor: make([]operation.ID, 0, len(translator.specs))}
 	for _, spec := range translator.specs {
 		status.WaitingFor = append(status.WaitingFor, ctx.Submit(spec))
@@ -1097,6 +1209,17 @@ type itemRequest struct {
 }
 
 type fakeStore struct {
+	resume                 sessionstore.ResumeState
+	items                  []sessionstore.Item
+	itemRequests           []itemRequest
+	appendedTurns          []session.Turn
+	appendedResponses      []sessionstore.ModelResponse
+	appendedStatuses       []sessionstore.ToolCallStatus
+	savedOperations        []operation.Operation
+	appendInputErr         error
+	appendModelResponseErr error
+	saveOperationErr       error
+	unexpectedMutations    []string
 }
 
 func (store *fakeStore) Create(context.Context, session.ID) (sessionstore.Snapshot, error) {
@@ -1140,6 +1263,7 @@ func (store *fakeStore) AppendModelResponse(
 	response sessionstore.ModelResponse,
 ) error {
 	store.appendedResponses = append(store.appendedResponses, response)
+	return store.appendModelResponseErr
 }
 
 func (store *fakeStore) AppendToolCallStatus(

@@ -85,6 +85,19 @@ func (current *coordinator) Run(ctx context.Context) error {
 	}
 }
 
+func (current *coordinator) handleModelResponse(
+	ctx context.Context,
+	response sessionstore.ModelResponse,
+	item, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemModelResponse,
+		Data: response,
+	})
+	if err != nil {
+	}
+	if err := current.storeItemInSessionStore(ctx, item); err != nil {
+	}
+}
+
 func (current *coordinator) handleOperationUpdate(
 	ctx context.Context,
 	update operation.Operation,
