@@ -70,9 +70,13 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantInput := withPreamble(t,
+		llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "hello"}},
 		response.Output[0],
 		response.Output[1],
+		llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{
 		}},
+	)
 	if !reflect.DeepEqual(built.Request.Input, wantInput) {
 		t.Fatalf("built request = %#v, want input %#v", built.Request, wantInput)
 	}
@@ -130,6 +134,10 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(t,
+		llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "parent"}},
+		llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "child"}},
+	)
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("replayed input = %#v, want %#v", built.Request.Input, want)
 	}
@@ -208,6 +216,7 @@ func TestCoordinatorKeepsUnreplayableToolStatusInLocalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(built.Request.Input, withPreamble(t, llm.Item{Type: llm.ItemToolCall, Data: call})) {
 		t.Fatalf("replayed input = %#v", built.Request.Input)
 	}
 }
@@ -261,6 +270,9 @@ func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(t,
+		llm.Item{Type: llm.ItemToolCall, Data: call},
+	)
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("replayed input = %#v, want %#v", built.Request.Input, want)
 	}
@@ -475,7 +487,9 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(t, llm.Item{
 		Type: llm.ItemToolResult,
+	})
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
@@ -612,6 +626,7 @@ func TestCoordinatorKeepsControlInputWithoutContextProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(built.Request.Input, withPreamble(t)) {
 		t.Fatalf("replayed input = %#v", built.Request.Input)
 	}
 }
@@ -708,8 +723,10 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(t, llm.Item{
 		Type: llm.ItemMessage,
 		Data: llm.Message{Role: llm.RoleUser, Text: "hello"},
+	})
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
@@ -957,6 +974,8 @@ func TestCoordinatorRunStartsCorrectiveTurnForValidationError(t *testing.T) {
 		store.appendedTurns[1].PreviousTurnID != store.appendedTurns[0].ID {
 		t.Fatalf("appended turns = %#v", store.appendedTurns)
 	}
+	if len(firstRequest.Input) != 2 || len(secondRequest.Input) != 4 ||
+		secondRequest.Input[3].Type != llm.ItemToolResult {
 		t.Fatalf("model requests = %#v", []llm.Request{firstRequest, secondRequest})
 	}
 }
@@ -1103,6 +1122,7 @@ func TestCoordinatorRunSteersActiveModelRequest(t *testing.T) {
 	) (llm.Response, error) {
 		started <- request
 		<-ctx.Done()
+		if len(request.Input) == 2 {
 			firstCanceled <- struct{}{}
 		}
 		return llm.Response{}, ctx.Err()
@@ -1130,6 +1150,7 @@ func TestCoordinatorRunSteersActiveModelRequest(t *testing.T) {
 		t.Fatalf("Run stopped after superseded cancellation: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
+	if len(firstRequest.Input) != 2 || len(secondRequest.Input) != 3 {
 		t.Fatalf("steered requests = %#v", []llm.Request{firstRequest, secondRequest})
 	}
 	if len(store.appendedTurns) != 2 ||
@@ -1223,6 +1244,7 @@ func TestCoordinatorRunDropsSuccessfulResponseFromSupersededTurn(t *testing.T) {
 		request llm.Request,
 	) (llm.Response, error) {
 		started <- request
+		if len(request.Input) == 2 {
 			<-ctx.Done()
 			firstReturned <- struct{}{}
 			return firstResponse, nil
@@ -1542,6 +1564,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testin
 		len(store.appendedTurns) != 1 || store.appendedTurns[0].PreviousTurnID != "turn-1" {
 		t.Fatalf("statuses = %#v, turns = %#v", store.appendedStatuses, store.appendedTurns)
 	}
+	if len(request.Input) != 3 || request.Input[2].Type != llm.ItemToolResult {
 		t.Fatalf("corrective request = %#v", request)
 	}
 }
@@ -1686,6 +1709,9 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(t,
+		llm.Item{Type: llm.ItemToolCall, Data: call},
+	)
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
@@ -1781,6 +1807,7 @@ func TestCoordinatorDoesNotCompleteToolCallBeforeOperationIsStored(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(built.Request.Input) != 2 {
 		t.Fatalf("tool results = %#v, want only the initial result", built.Request.Input)
 	}
 }
@@ -1926,8 +1953,10 @@ func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.
 	if buildErr != nil {
 		t.Fatal(buildErr)
 	}
+	want := withPreamble(t, llm.Item{
 		Type: llm.ItemMessage,
 		Data: llm.Message{Role: llm.RoleUser, Text: "hello"},
+	})
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
@@ -2118,6 +2147,16 @@ func newTestCoordinatorWithAdapter(
 		Tools:          registry,
 		Operations:     operations,
 	}).(*coordinator)
+}
+
+// withPreamble expects the items after the preamble every context builder starts with.
+func withPreamble(t *testing.T, items ...llm.Item) []llm.Item {
+	t.Helper()
+	initial, err := contextbuilder.NewBuilder().Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(initial.Request.Input, items...)
 }
 
 func emptyFakeStore() *fakeStore {

@@ -1,13 +1,20 @@
 package contextbuilder
 
 import (
+	_ "embed"
 	"encoding/json/v2"
 	"fmt"
+	"strings"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
+
+//go:embed prompts/preamble.md
+var preambleFile string
+
+var preamble = strings.TrimSpace(preambleFile)
 
 type builder struct {
 }
@@ -40,6 +47,7 @@ func (current *builder) SetModel(model llm.Model) {
 }
 
 func (current *builder) SetSystemPrompt(prompt string) {
+	current.systemPrompt = prompt
 }
 
 func (current *builder) AddModelResponse(response llm.Response) {

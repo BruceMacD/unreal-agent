@@ -10,6 +10,14 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
+// withPreamble expects the items after the preamble every builder starts with.
+func withPreamble(items ...llm.Item) []llm.Item {
+	return append([]llm.Item{{
+		Type: llm.ItemMessage,
+		Data: llm.Message{Role: llm.RoleSystem, Text: preamble},
+	}}, items...)
+}
+
 func TestBuilderAddsExternalInputAsUserMessage(t *testing.T) {
 	payload, err := json.Marshal("Hello")
 	if err != nil {
@@ -28,8 +36,10 @@ func TestBuilderAddsExternalInputAsUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(llm.Item{
 		Type: llm.ItemMessage,
 		Data: llm.Message{Role: llm.RoleUser, Text: "Hello"},
+	})
 	if !reflect.DeepEqual(result.Request.Input, want) {
 		t.Fatalf("input = %#v, want %#v", result.Request.Input, want)
 	}
@@ -65,6 +75,7 @@ func TestBuilderRejectsInvalidExternalInput(t *testing.T) {
 			if buildErr != nil {
 				t.Fatal(buildErr)
 			}
+			if !reflect.DeepEqual(result.Request.Input, withPreamble()) {
 				t.Fatalf("input = %#v", result.Request.Input)
 			}
 		})
@@ -101,6 +112,9 @@ func TestBuilderAddsModelResponseOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := withPreamble(output...)
+	if !reflect.DeepEqual(result.Request.Input, want) {
+		t.Fatalf("input = %#v, want %#v", result.Request.Input, want)
 	}
 }
 
@@ -130,8 +144,13 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 	want := Result{Request: llm.Request{
 		Model: model,
 		Tools: []llm.Tool{weather},
+		Input: withPreamble(
+			llm.Item{Type: llm.ItemReasoning, Data: reasoning},
+			llm.Item{Type: llm.ItemToolCall, Data: call},
+			llm.Item{
 				Type: llm.ItemToolResult,
 			},
+		),
 	}}
 	if !reflect.DeepEqual(result, want) {
 		t.Fatalf("result = %#v\nwant %#v", result, want)
@@ -146,6 +165,7 @@ func TestBuilderPreservesToolResultPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := result.Request.Input[1].Data.(llm.ToolResult)
 	}
 	if len(result.Report.Changes) != 0 {
 		t.Fatalf("changes = %#v", result.Report.Changes)
@@ -159,6 +179,7 @@ func TestBuilderAppendsValidationErrorToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := result.Request.Input[1].Data.(llm.ToolResult); !reflect.DeepEqual(got, want) {
 		t.Fatalf("result = %#v, want %#v", got, want)
 	}
 }
@@ -166,6 +187,7 @@ func TestBuilderAppendsValidationErrorToolResult(t *testing.T) {
 	}
 }
 
+func TestBuilderLeadsSystemPromptWithPreamble(t *testing.T) {
 	payload, err := json.Marshal("hello")
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +205,9 @@ func TestBuilderAppendsValidationErrorToolResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []llm.Item{
+		{Type: llm.ItemMessage, Data: llm.Message{
+			Role: llm.RoleSystem, Text: preamble + "\n\nBe concise.",
+		}},
 		{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "hello"}},
 	}
 	if !reflect.DeepEqual(result.Request.Input, want) {
