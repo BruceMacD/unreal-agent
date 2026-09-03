@@ -22,6 +22,14 @@ type RemoteJobPlan struct {
 	Data    jsontext.Value
 }
 
+type RemoteJobHandler interface {
+	RemoteJobPlanType() RemoteJobPlanType
+	RemoteJobPlanVersion() RemoteJobPlanVersion
+	AddRemoteJob(Operation) error
+	CancelRemoteJob(ID, string) error
+	RemoteJobUpdates() <-chan Operation
+}
+
 type RemoteJobState struct {
 	Plan             RemoteJobPlan
 	Handle           jsontext.Value `json:",omitzero"`

@@ -11,6 +11,9 @@ import (
 
 type fixedTranslator struct {
 	status CallStatus
+	result llm.ToolResult
+}
+
 type recordingContext struct {
 	specs []operation.Spec
 }
@@ -29,6 +32,9 @@ func (translator *fixedTranslator) TranslateResult(
 	_ CallStatus,
 	_ []operation.Operation,
 ) (llm.ToolResult, error) {
+	return translator.result, nil
+}
+
 	translators := StaticTranslators{
 	}
 	definitions := registry.StaticDefinitions()

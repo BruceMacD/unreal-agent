@@ -44,6 +44,8 @@ func (current *registry) Resolve(name string) (Translator, bool) {
 	if translator, exists := current.staticTranslators[name]; exists {
 		return translator, true
 	}
+}
+
 func (current *registry) RegisterSkill(skill Skill) (RegistrationID, error) {
 	current.mu.Lock()
 	defer current.mu.Unlock()

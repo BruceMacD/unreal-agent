@@ -18,7 +18,12 @@ type Context interface {
 	Submit(operation.Spec) operation.ID
 }
 
+type ResultTranslator interface {
+	TranslateResult(string, CallStatus, []operation.Operation) (llm.ToolResult, error)
+}
+
 type Translator interface {
+	ResultTranslator
 	Translate(Context, llm.ToolCall) CallStatus
 }
 
