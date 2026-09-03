@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
@@ -29,6 +30,8 @@ type Store struct {
 	directory            string
 	writeStateCacheMutex sync.Mutex
 	writeStateCache      map[session.ID]cachedWriteState
+	observers            map[sessionstore.ObserverID]sessionstore.Observer
+	observerOrder        []sessionstore.ObserverID
 }
 
 var _ sessionstore.Store = (*Store)(nil)
@@ -47,7 +50,22 @@ func New(directory string) (*Store, error) {
 	return &Store{
 		directory:       absolute,
 		writeStateCache: make(map[session.ID]cachedWriteState),
+		observers:       make(map[sessionstore.ObserverID]sessionstore.Observer),
 	}, nil
+}
+
+func (store *Store) AddObserver(observer sessionstore.Observer) sessionstore.ObserverID {
+	if observer == nil {
+		return uuid.Nil()
+	}
+	id := uuid.New()
+	store.observers[id] = observer
+	store.observerOrder = append(store.observerOrder, id)
+	return id
+}
+
+func (store *Store) RemoveObserver(id sessionstore.ObserverID) {
+	delete(store.observers, id)
 }
 
 func (store *Store) Create(ctx context.Context, id session.ID) (sessionstore.Snapshot, error) {
@@ -110,7 +128,13 @@ func (store *Store) AppendInput(ctx context.Context, id session.ID, input inbox.
 	if err != nil {
 		return err
 	}
+	if err := store.append(id, head, committedSize, recordItem, itemRecord{
 		Item: item,
+	}); err != nil {
+		return err
+	}
+	store.notifyObservers(id, item)
+	return nil
 }
 
 func (store *Store) AppendTurn(ctx context.Context, id session.ID, turn session.Turn) error {
@@ -122,7 +146,13 @@ func (store *Store) AppendTurn(ctx context.Context, id session.ID, turn session.
 	if err != nil {
 		return err
 	}
+	if err := store.append(id, head, committedSize, recordItem, itemRecord{
 		Item: item,
+	}); err != nil {
+		return err
+	}
+	store.notifyObservers(id, item)
+	return nil
 }
 
 func (store *Store) AppendModelResponse(
@@ -138,7 +168,13 @@ func (store *Store) AppendModelResponse(
 	if err != nil {
 		return err
 	}
+	if err := store.append(id, head, committedSize, recordItem, itemRecord{
 		Item: item,
+	}); err != nil {
+		return err
+	}
+	store.notifyObservers(id, item)
+	return nil
 }
 
 func (store *Store) AppendToolCallStatus(
@@ -156,8 +192,16 @@ func (store *Store) AppendToolCallStatus(
 	if err != nil {
 		return err
 	}
+	if err := store.append(id, head, committedSize, recordItem, itemRecord{
 		Item:       item,
 		Operations: operations,
+	}); err != nil {
+		return err
+	}
+	status.Operations = operations
+	item.Data = status
+	store.notifyObservers(id, item)
+	return nil
 }
 
 func (store *Store) SaveOperation(
@@ -215,7 +259,16 @@ func (store *Store) Fork(
 	if err := store.publishInitialState(state); err != nil {
 		return sessionstore.Snapshot{}, fmt.Errorf("fork session %q: %w", id, err)
 	}
+	store.notifyObservers(id, state.Items[len(state.Items)-1])
 	return state.Snapshot, nil
+}
+
+func (store *Store) notifyObservers(id session.ID, item sessionstore.Item) {
+	for _, observerID := range store.observerOrder {
+		if observer, exists := store.observers[observerID]; exists {
+			observer(id, item)
+		}
+	}
 }
 
 func (store *Store) readState(

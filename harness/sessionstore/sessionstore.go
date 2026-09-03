@@ -4,6 +4,7 @@ package sessionstore
 import (
 	"context"
 	"time"
+	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
@@ -35,6 +36,12 @@ type Item struct {
 	Kind       ItemKind
 	Data       any
 }
+
+type ObserverID = uuid.UUID
+
+// Observer is called synchronously after an item is persisted. The session ID
+// identifies the history containing the item.
+type Observer func(session.ID, Item)
 
 type Fork struct {
 	ParentID       session.ID
@@ -70,6 +77,10 @@ type ResumeState struct {
 
 // Store does not serialize methods for the same session ID.
 type Store interface {
+	// AddObserver and RemoveObserver are not safe for concurrent use with each
+	// other or with methods that persist items.
+	AddObserver(Observer) ObserverID
+	RemoveObserver(ObserverID)
 	Create(context.Context, session.ID) (Snapshot, error)
 	Inspect(context.Context, session.ID) (Snapshot, error)
 	Items(context.Context, session.ID, Sequence, int) (Page, error)

@@ -2259,6 +2259,12 @@ type fakeStore struct {
 	onSaveOperation        func(operation.Operation)
 }
 
+func (*fakeStore) AddObserver(sessionstore.Observer) sessionstore.ObserverID {
+	return sessionstore.ObserverID{}
+}
+
+func (*fakeStore) RemoveObserver(sessionstore.ObserverID) {}
+
 func (store *fakeStore) Create(context.Context, session.ID) (sessionstore.Snapshot, error) {
 	store.unexpectedMutations = append(store.unexpectedMutations, "create")
 	return sessionstore.Snapshot{}, errors.New("unexpected create")

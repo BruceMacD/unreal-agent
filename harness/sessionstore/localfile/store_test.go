@@ -164,6 +164,126 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 	}
 }
 
+func TestStoreNotifiesObserversSynchronouslyAfterItemPersistence(t *testing.T) {
+	directory := t.TempDir()
+	store := newStore(t, directory)
+	if _, err := store.Create(t.Context(), "session-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var notifications []string
+	observe := func(name string) sessionstore.Observer {
+		return func(id session.ID, item sessionstore.Item) {
+			reopened := newStore(t, directory)
+			page, err := reopened.Items(t.Context(), id, item.Sequence-1, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Items) != 1 || !reflect.DeepEqual(page.Items[0], item) {
+				t.Fatalf("persisted items = %#v, want %#v", page.Items, item)
+			}
+			notifications = append(notifications, name+":"+string(item.Kind))
+		}
+	}
+
+	firstID := store.AddObserver(observe("first"))
+	secondID := store.AddObserver(observe("second"))
+		t.Fatal(err)
+	}
+	store.RemoveObserver(firstID)
+	if err := store.AppendModelResponse(t.Context(), "session-1", sessionstore.ModelResponse{
+		TurnID: "turn-1", Response: llm.Response{ID: "response-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.RemoveObserver(secondID)
+	if err := store.AppendInput(t.Context(), "session-1", inbox.Input{
+		ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"first:" + string(sessionstore.ItemTurn),
+		"second:" + string(sessionstore.ItemTurn),
+		"second:" + string(sessionstore.ItemModelResponse),
+	}
+	if !reflect.DeepEqual(notifications, want) {
+		t.Fatalf("notifications = %#v, want %#v", notifications, want)
+	}
+}
+
+func TestStoreObserverReceivesCanonicalToolCallStatusItem(t *testing.T) {
+	store := newStore(t, t.TempDir())
+	createSessionWithTurn(t, store, "session-1", "turn-1", "")
+
+	var observed []sessionstore.Item
+	store.AddObserver(func(id session.ID, item sessionstore.Item) {
+		if id != "session-1" {
+			t.Fatalf("session ID = %q, want session-1", id)
+		}
+		observed = append(observed, item)
+	})
+	initial := operation.Operation{
+		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
+	}
+	status := sessionstore.ToolCallStatus{
+		TurnID:     "turn-1",
+		CallID:     "call-1",
+		Status:     tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+		Operations: []operation.Operation{initial},
+	}
+	if err := store.AppendToolCallStatus(t.Context(), "session-1", status); err != nil {
+		t.Fatal(err)
+	}
+	updated := initial
+	updated.Status = operation.StatusAwaiting
+	if err := store.SaveOperation(t.Context(), "session-1", updated); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(observed) != 1 {
+		t.Fatalf("observed items = %#v, want one tool-call status", observed)
+	}
+	if observed[0].Kind != sessionstore.ItemToolCallStatus ||
+		!reflect.DeepEqual(observed[0].Data, status) {
+		t.Fatalf("observed item = %#v, want status %#v", observed[0], status)
+	}
+}
+
+func TestStoreDoesNotNotifyObserverWhenItemPersistenceFails(t *testing.T) {
+	store := newStore(t, t.TempDir())
+	observed := 0
+	store.AddObserver(func(session.ID, sessionstore.Item) {
+		observed++
+	})
+
+		t.Fatal("append to missing session succeeded")
+	}
+	if observed != 0 {
+		t.Fatalf("observer called %d times after failed persistence", observed)
+	}
+}
+
+func TestStoreNotifiesObserverOfForkItem(t *testing.T) {
+	store := newStore(t, t.TempDir())
+	createSessionWithTurn(t, store, "parent", "turn-1", "")
+
+	var observedSession session.ID
+	var observedItem sessionstore.Item
+	store.AddObserver(func(id session.ID, item sessionstore.Item) {
+		observedSession = id
+		observedItem = item
+	})
+	if _, err := store.Fork(t.Context(), "child", "parent", "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if observedSession != "child" || observedItem.Kind != sessionstore.ItemFork {
+		t.Fatalf("observed session and item = %q, %#v", observedSession, observedItem)
+	}
+}
+
 func TestStoreRejectsLegacySessionResume(t *testing.T) {
 	store := newStore(t, "testdata")
 	_, err := store.Resume(t.Context(), "legacy-session")
