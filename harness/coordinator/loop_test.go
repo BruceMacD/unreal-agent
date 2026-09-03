@@ -9,7 +9,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -500,8 +502,33 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 	store := emptyFakeStore()
+	store.items = []sessionstore.Item{storedItem(
+		1,
+		sessionstore.ItemTurn,
+	)}
 	operations := newFakeOperationManager()
+	started := make(chan llm.Request, 1)
+	requestCanceled := make(chan error, 1)
+	var orderMutex sync.Mutex
+	order := make([]string, 0, 3)
+	record := func(value string) {
+		orderMutex.Lock()
+		defer orderMutex.Unlock()
+		order = append(order, value)
+	}
+	store.onAppendTurn = func(session.Turn) { record("turn") }
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		record("respond")
+		started <- request
+		<-ctx.Done()
+		requestCanceled <- ctx.Err()
+		return llm.Response{}, ctx.Err()
+	}}
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -511,11 +538,14 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 		tool.NewRegistry(tool.StaticTranslators{}),
 		adapter,
 	)
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
+		done <- current.Run(ctx)
 	}()
 
 	event := externalEvent(t, 1, "input-1", "hello")
+	request := receiveTestValue(t, started)
 	built, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -525,6 +555,593 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
+	if !reflect.DeepEqual(request, built.Request) {
+		t.Fatalf("model request = %#v, want %#v", request, built.Request)
+	}
+	}
+	if len(store.appendedTurns) != 1 || store.appendedTurns[0].ID == "" ||
+		store.appendedTurns[0].PreviousTurnID != "previous-turn" {
+		t.Fatalf("appended turns = %#v", store.appendedTurns)
+	}
+	orderMutex.Lock()
+	gotOrder := append([]string(nil), order...)
+	orderMutex.Unlock()
+	if !reflect.DeepEqual(gotOrder, []string{"input", "turn", "respond"}) {
+		t.Fatalf("effect order = %v", gotOrder)
+	}
+	if len(operations.adds) != 0 || len(operations.cancels) != 0 {
+		t.Fatalf("unexpected operation effects: adds=%v cancels=%v", operations.adds, operations.cancels)
+	}
+
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if err := receiveTestValue(t, requestCanceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("model request error = %v, want context cancellation", err)
+	}
+}
+
+func TestCoordinatorRunDoesNotCallModelWhenRequestBuildFails(t *testing.T) {
+	store := emptyFakeStore()
+	adapter := &fakeAdapter{}
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		failingBuilder{
+			Builder: contextbuilder.NewBuilder(),
+			err:     errors.New("context unavailable"),
+		},
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(t.Context())
+	}()
+
+	event := externalEvent(t, 1, "input-1", "hello")
+	err := receiveTestValue(t, done)
+	if err == nil || err.Error() != "build model request: context unavailable" {
+		t.Fatalf("Run error = %v", err)
+	}
+		len(store.appendedTurns) != 0 || len(adapter.requestSnapshot()) != 0 {
+		t.Fatalf(
+			"effects after build failure: inputs=%v turns=%v requests=%v",
+			store.appendedInputs,
+			store.appendedTurns,
+			adapter.requestSnapshot(),
+		)
+	}
+}
+
+func TestCoordinatorRunDoesNotCallModelWhenTurnStoreFails(t *testing.T) {
+	store := emptyFakeStore()
+	store.appendTurnErr = errors.New("disk unavailable")
+	adapter := &fakeAdapter{}
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(t.Context())
+	}()
+
+	err := receiveTestValue(t, done)
+	if err == nil || !strings.Contains(err.Error(), "disk unavailable") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(store.appendedTurns) != 1 || len(adapter.requestSnapshot()) != 0 {
+		t.Fatalf(
+			"effects after turn store failure: turns=%v requests=%v",
+			store.appendedTurns,
+			adapter.requestSnapshot(),
+		)
+	}
+}
+
+func TestCoordinatorRunPersistsModelResponseForOriginatingTurn(t *testing.T) {
+	store := emptyFakeStore()
+	responseStored := make(chan sessionstore.ModelResponse, 1)
+	store.onAppendModelResponse = func(response sessionstore.ModelResponse) {
+		responseStored <- response
+	}
+	response := llm.Response{ID: "response-1", Output: []llm.Item{{
+		Type: llm.ItemMessage,
+		Data: llm.Message{Role: llm.RoleAssistant, Text: "done"},
+	}}}
+	adapter := &fakeAdapter{respond: func(
+		context.Context,
+		llm.Request,
+	) (llm.Response, error) {
+		return response, nil
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	stored := receiveTestValue(t, responseStored)
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if len(store.appendedTurns) != 1 || stored.TurnID != store.appendedTurns[0].ID ||
+		!reflect.DeepEqual(stored.Response, response) {
+		t.Fatalf("stored response = %#v, turns = %#v", stored, store.appendedTurns)
+	}
+	if len(adapter.requestSnapshot()) != 1 || len(store.appendedResponses) != 1 ||
+		len(store.appendedTurns) != 1 {
+		t.Fatalf(
+			"message response effects: requests=%v responses=%v turns=%v",
+			adapter.requestSnapshot(),
+			store.appendedResponses,
+			store.appendedTurns,
+		)
+	}
+}
+
+func TestCoordinatorRunPersistsToolCallBeforeDispatch(t *testing.T) {
+	spec, err := operation.NewValueSpec(jsontext.Value(`{"value":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	translator := &submittingTranslator{specs: []operation.Spec{spec}}
+	store := emptyFakeStore()
+	dispatched := make(chan operation.Operation, 1)
+	operations := newFakeOperationManager()
+	operations.addError = func(value operation.Operation) error {
+		if len(store.appendedResponses) != 1 || len(store.appendedStatuses) != 1 {
+			return errors.New("operation dispatched before response and status were stored")
+		}
+		dispatched <- value
+		return nil
+	}
+	response := llm.Response{ID: "response-1", Output: []llm.Item{{
+		Type: llm.ItemToolCall,
+		Data: llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`},
+	}}}
+	adapter := &fakeAdapter{respond: func(
+		context.Context,
+		llm.Request,
+	) (llm.Response, error) {
+		return response, nil
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	operationValue := receiveTestValue(t, dispatched)
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if len(store.appendedStatuses) != 1 ||
+		!reflect.DeepEqual(store.appendedStatuses[0].Operations, []operation.Operation{operationValue}) ||
+		!reflect.DeepEqual(store.appendedStatuses[0].Status.WaitingFor, []operation.ID{operationValue.ID}) {
+		t.Fatalf("appended statuses = %#v, operation = %#v", store.appendedStatuses, operationValue)
+	}
+	if len(adapter.requestSnapshot()) != 1 || len(store.appendedTurns) != 1 {
+		t.Fatalf("requests = %v, turns = %v", adapter.requestSnapshot(), store.appendedTurns)
+	}
+}
+
+func TestCoordinatorRunStartsCorrectiveTurnForValidationError(t *testing.T) {
+	firstResponse := llm.Response{ID: "response-1", Output: []llm.Item{{
+		Type: llm.ItemToolCall,
+		Data: llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`},
+	}}}
+	started := make(chan llm.Request, 2)
+	callCount := 0
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		callCount++
+		started <- request
+		if callCount == 1 {
+			return firstResponse, nil
+		}
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
+	store := emptyFakeStore()
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	firstRequest := receiveTestValue(t, started)
+	secondRequest := receiveTestValue(t, started)
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if len(store.appendedStatuses) != 1 || store.appendedStatuses[0].Status.Error == "" {
+		t.Fatalf("appended statuses = %#v", store.appendedStatuses)
+	}
+	if len(store.appendedTurns) != 2 ||
+		store.appendedTurns[1].PreviousTurnID != store.appendedTurns[0].ID {
+		t.Fatalf("appended turns = %#v", store.appendedTurns)
+	}
+		t.Fatalf("model requests = %#v", []llm.Request{firstRequest, secondRequest})
+	}
+}
+
+func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) {
+	spec, err := operation.NewValueSpec(jsontext.Value(`{"value":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	translator := &submittingTranslator{specs: []operation.Spec{spec}}
+	firstResponse := llm.Response{ID: "response-1", Output: []llm.Item{{
+		Type: llm.ItemToolCall,
+		Data: llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`},
+	}}}
+	started := make(chan llm.Request, 2)
+	callCount := 0
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		callCount++
+		started <- request
+		if callCount == 1 {
+			return firstResponse, nil
+		}
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
+	store := emptyFakeStore()
+	operations := newFakeOperationManager()
+	dispatched := make(chan operation.Operation, 1)
+	operations.addError = func(value operation.Operation) error {
+		dispatched <- value
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	_ = receiveTestValue(t, started)
+	operationValue := receiveTestValue(t, dispatched)
+	operationValue.Status = operation.StatusCompleted
+	operations.updates <- operationValue
+	continuationRequest := receiveTestValue(t, started)
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{operationValue}) ||
+		len(store.appendedStatuses) != 2 ||
+		!reflect.DeepEqual(store.appendedStatuses[1].Operations, []operation.Operation{operationValue}) {
+		t.Fatalf(
+			"completion effects: operations=%#v statuses=%#v",
+			store.savedOperations,
+			store.appendedStatuses,
+		)
+	}
+		t.Fatalf("continuation request = %#v", continuationRequest)
+	}
+	if len(adapter.requestSnapshot()) != 2 || len(store.appendedTurns) != 2 {
+		t.Fatalf("requests = %v, turns = %v", adapter.requestSnapshot(), store.appendedTurns)
+	}
+}
+
+func TestCoordinatorRunBatchesCompletedToolCallsIntoOneTurn(t *testing.T) {
+	operationValue := operation.Operation{
+		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
+	}
+	calls := []llm.ToolCall{
+	}
+	status := tool.CallStatus{WaitingFor: []operation.ID{operationValue.ID}}
+	store := emptyFakeStore()
+	store.items = []sessionstore.Item{
+		storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
+			TurnID: "turn-1",
+			Response: llm.Response{Output: []llm.Item{
+				{Type: llm.ItemToolCall, Data: calls[0]},
+				{Type: llm.ItemToolCall, Data: calls[1]},
+			}},
+		}),
+		storedItem(3, sessionstore.ItemToolCallStatus, sessionstore.ToolCallStatus{
+			TurnID: "turn-1", CallID: calls[0].CallID, Status: status,
+			Operations: []operation.Operation{operationValue},
+		}),
+		storedItem(4, sessionstore.ItemToolCallStatus, sessionstore.ToolCallStatus{
+			TurnID: "turn-1", CallID: calls[1].CallID, Status: status,
+			Operations: []operation.Operation{operationValue},
+		}),
+	}
+	started := make(chan llm.Request, 1)
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		started <- request
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
+	operations := newFakeOperationManager()
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+		registry,
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	operationValue.Status = operation.StatusCompleted
+	operations.updates <- operationValue
+	request := receiveTestValue(t, started)
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if len(store.appendedStatuses) != 2 || len(store.appendedTurns) != 1 ||
+		store.appendedTurns[0].PreviousTurnID != "turn-1" {
+		t.Fatalf("statuses = %#v, turns = %#v", store.appendedStatuses, store.appendedTurns)
+	}
+		t.Fatalf("requests = %#v", adapter.requestSnapshot())
+	}
+}
+
+func TestCoordinatorRunSteersActiveModelRequest(t *testing.T) {
+	started := make(chan llm.Request, 2)
+	firstCanceled := make(chan struct{}, 1)
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		started <- request
+		<-ctx.Done()
+			firstCanceled <- struct{}{}
+		}
+		return llm.Response{}, ctx.Err()
+	}}
+	store := emptyFakeStore()
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	firstRequest := receiveTestValue(t, started)
+	secondRequest := receiveTestValue(t, started)
+	_ = receiveTestValue(t, firstCanceled)
+	select {
+	case err := <-done:
+		t.Fatalf("Run stopped after superseded cancellation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+		t.Fatalf("steered requests = %#v", []llm.Request{firstRequest, secondRequest})
+	}
+	if len(store.appendedTurns) != 2 ||
+		store.appendedTurns[1].PreviousTurnID != store.appendedTurns[0].ID {
+		t.Fatalf("appended turns = %#v", store.appendedTurns)
+	}
+	if len(store.appendedResponses) != 0 {
+		t.Fatalf("appended responses = %#v", store.appendedResponses)
+	}
+
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+}
+
+func TestCoordinatorRunHandlesOperationUpdateWhileModelIsRunning(t *testing.T) {
+	started := make(chan struct{}, 1)
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		_ llm.Request,
+	) (llm.Response, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
+	initial := operation.Operation{
+		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
+	}
+	store := emptyFakeStore()
+	storedUpdate := make(chan operation.Operation, 1)
+	store.onSaveOperation = func(value operation.Operation) {
+		storedUpdate <- value
+	}
+	operations := newFakeOperationManager()
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	_ = receiveTestValue(t, started)
+	update := initial
+	update.Status = operation.StatusAwaiting
+	operations.updates <- update
+	if stored := receiveTestValue(t, storedUpdate); !reflect.DeepEqual(stored, update) {
+		t.Fatalf("stored operation = %#v, want %#v", stored, update)
+	}
+
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if len(adapter.requestSnapshot()) != 1 || len(store.appendedTurns) != 1 {
+		t.Fatalf("requests = %v, turns = %v", adapter.requestSnapshot(), store.appendedTurns)
+	}
+}
+
+func TestCoordinatorRunDropsSuccessfulResponseFromSupersededTurn(t *testing.T) {
+	spec, err := operation.NewValueSpec(jsontext.Value(`{"value":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	translator := &submittingTranslator{specs: []operation.Spec{spec}}
+	firstResponse := llm.Response{ID: "response-1", Output: []llm.Item{{
+		Type: llm.ItemToolCall,
+		Data: llm.ToolCall{CallID: "stale-call", Name: tool.BashName, Arguments: `{}`},
+	}}}
+	secondResponse := llm.Response{ID: "response-2", Output: []llm.Item{{
+		Type: llm.ItemMessage,
+		Data: llm.Message{Role: llm.RoleAssistant, Text: "current answer"},
+	}}}
+	started := make(chan llm.Request, 2)
+	firstReturned := make(chan struct{}, 1)
+	releaseSecond := make(chan struct{})
+	responseStored := make(chan sessionstore.ModelResponse, 2)
+	store := emptyFakeStore()
+	store.onAppendModelResponse = func(response sessionstore.ModelResponse) {
+		responseStored <- response
+	}
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		started <- request
+			<-ctx.Done()
+			firstReturned <- struct{}{}
+			return firstResponse, nil
+		}
+		<-releaseSecond
+		return secondResponse, nil
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	_ = receiveTestValue(t, started)
+	_ = receiveTestValue(t, started)
+	_ = receiveTestValue(t, firstReturned)
+	time.Sleep(20 * time.Millisecond)
+	close(releaseSecond)
+	stored := receiveTestValue(t, responseStored)
+	if len(store.appendedTurns) != 2 || stored.TurnID != store.appendedTurns[1].ID ||
+		!reflect.DeepEqual(stored.Response, secondResponse) {
+		t.Fatalf("stored response = %#v, turns = %#v", stored, store.appendedTurns)
+	}
+	select {
+	case unexpected := <-responseStored:
+		t.Fatalf("stored superseded response = %#v", unexpected)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if !reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{stored}) ||
+		len(translator.calls) != 0 || len(store.appendedStatuses) != 0 {
+		t.Fatalf(
+			"superseded effects: responses=%#v translations=%#v statuses=%#v",
+			store.appendedResponses,
+			translator.calls,
+			store.appendedStatuses,
+		)
+	}
+}
+
+func TestCoordinatorRunReturnsCurrentModelError(t *testing.T) {
+	providerErr := errors.New("provider unavailable")
+	adapter := &fakeAdapter{respond: func(
+		context.Context,
+		llm.Request,
+	) (llm.Response, error) {
+		return llm.Response{}, providerErr
+	}}
+	store := emptyFakeStore()
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(t.Context())
+	}()
+
+	err := receiveTestValue(t, done)
+	if !errors.Is(err, providerErr) || !strings.Contains(err.Error(), "call model for turn") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(store.appendedTurns) != 1 || len(store.appendedResponses) != 0 {
+		t.Fatalf("turns = %#v, responses = %#v", store.appendedTurns, store.appendedResponses)
 	}
 }
 
@@ -558,6 +1175,7 @@ func TestCoordinatorHandlesModelResponseBeforeSchedulingToolCalls(t *testing.T) 
 		contextbuilder.NewBuilder(),
 	)
 
+	if _, err := current.handleModelResponse(t.Context(), response); err != nil {
 		t.Fatal(err)
 	}
 	if !storedBeforeTranslation {
@@ -588,6 +1206,7 @@ func TestCoordinatorDoesNotScheduleToolCallsWhenModelResponseStoreFails(t *testi
 		}}},
 	}
 
+	_, err := current.handleModelResponse(t.Context(), response)
 	if err == nil || err.Error() != `store turn "turn-1" response: disk unavailable` {
 		t.Fatalf("handle model response error = %v", err)
 	}
@@ -621,6 +1240,7 @@ func TestCoordinatorHandlesModelResponseWithoutToolCalls(t *testing.T) {
 		}}},
 	}
 
+	if _, err := current.handleModelResponse(t.Context(), response); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{response}) ||
@@ -712,10 +1332,55 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 	if !reflect.DeepEqual(gotOperations, wantOperations) {
 		t.Fatalf("dispatched operations = %#v, want %#v", gotOperations, wantOperations)
 	}
+	if _, err := current.scheduleToolCalls(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if len(translator.calls) != 1 || len(store.appendedStatuses) != 1 {
 		t.Fatalf("rescheduled call: calls=%#v statuses=%#v", translator.calls, store.appendedStatuses)
+	}
+}
+
+func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testing.T) {
+	call := llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`}
+	store := emptyFakeStore()
+	store.items = []sessionstore.Item{
+		storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
+			TurnID:   "turn-1",
+			Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},
+		}),
+	}
+	started := make(chan llm.Request, 1)
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		started <- request
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	request := receiveTestValue(t, started)
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+	if len(store.appendedStatuses) != 1 || store.appendedStatuses[0].Status.Error == "" ||
+		len(store.appendedTurns) != 1 || store.appendedTurns[0].PreviousTurnID != "turn-1" {
+		t.Fatalf("statuses = %#v, turns = %#v", store.appendedStatuses, store.appendedTurns)
+	}
+		t.Fatalf("corrective request = %#v", request)
 	}
 }
 
@@ -802,6 +1467,7 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	if err := current.handleOperationUpdate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := current.reconcileToolCalls(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	key := toolCallKey{turnID: status.TurnID, callID: status.CallID}
@@ -814,6 +1480,7 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	if err := current.handleOperationUpdate(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := current.reconcileToolCalls(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, exists := current.state.toolCalls[key]; exists {
@@ -1240,9 +1907,14 @@ type fakeStore struct {
 	appendedStatuses       []sessionstore.ToolCallStatus
 	savedOperations        []operation.Operation
 	appendInputErr         error
+	appendTurnErr          error
 	appendModelResponseErr error
 	saveOperationErr       error
 	unexpectedMutations    []string
+	onAppendTurn           func(session.Turn)
+	onAppendModelResponse  func(sessionstore.ModelResponse)
+	onAppendToolCallStatus func(sessionstore.ToolCallStatus)
+	onSaveOperation        func(operation.Operation)
 }
 
 func (store *fakeStore) Create(context.Context, session.ID) (sessionstore.Snapshot, error) {
@@ -1273,11 +1945,17 @@ func (store *fakeStore) Items(
 	return sessionstore.Page{Items: items, NextAfter: next, More: end < len(store.items)}, nil
 }
 
+	if store.onAppendInput != nil {
+	}
 	return store.appendInputErr
 }
 
 func (store *fakeStore) AppendTurn(_ context.Context, _ session.ID, turn session.Turn) error {
 	store.appendedTurns = append(store.appendedTurns, turn)
+	if store.onAppendTurn != nil {
+		store.onAppendTurn(turn)
+	}
+	return store.appendTurnErr
 }
 
 func (store *fakeStore) AppendModelResponse(
@@ -1286,6 +1964,9 @@ func (store *fakeStore) AppendModelResponse(
 	response sessionstore.ModelResponse,
 ) error {
 	store.appendedResponses = append(store.appendedResponses, response)
+	if store.onAppendModelResponse != nil {
+		store.onAppendModelResponse(response)
+	}
 	return store.appendModelResponseErr
 }
 
@@ -1295,6 +1976,9 @@ func (store *fakeStore) AppendToolCallStatus(
 	status sessionstore.ToolCallStatus,
 ) error {
 	store.appendedStatuses = append(store.appendedStatuses, status)
+	if store.onAppendToolCallStatus != nil {
+		store.onAppendToolCallStatus(status)
+	}
 }
 
 func (store *fakeStore) SaveOperation(
@@ -1303,6 +1987,9 @@ func (store *fakeStore) SaveOperation(
 	value operation.Operation,
 ) error {
 	store.savedOperations = append(store.savedOperations, value)
+	if store.onSaveOperation != nil {
+		store.onSaveOperation(value)
+	}
 	return store.saveOperationErr
 }
 
@@ -1355,12 +2042,42 @@ type fakeAdapter struct {
 }
 
 func (adapter *fakeAdapter) Respond(
+	ctx context.Context,
 	request llm.Request,
 ) (llm.Response, error) {
+	adapter.mutex.Lock()
 	adapter.requests = append(adapter.requests, request)
+	respond := adapter.respond
+	adapter.mutex.Unlock()
+	if respond != nil {
+		return respond(ctx, request)
+	}
 	return llm.Response{}, errors.New("unexpected respond")
 }
 
+func (adapter *fakeAdapter) requestSnapshot() []llm.Request {
+	adapter.mutex.Lock()
+	defer adapter.mutex.Unlock()
+	return append([]llm.Request(nil), adapter.requests...)
+}
+
+type failingBuilder struct {
+	contextbuilder.Builder
+	err error
+}
+
+func (builder failingBuilder) Build() (contextbuilder.Result, error) {
+	return contextbuilder.Result{}, builder.err
+}
+
+func receiveTestValue[T any](t *testing.T, values <-chan T) T {
 	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for value")
+		var zero T
+		return zero
 	}
 }

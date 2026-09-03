@@ -39,6 +39,12 @@ type toolCallContext struct {
 	operations []operation.Operation
 }
 
+type modelResponseResult struct {
+	turnID   session.TurnID
+	response llm.Response
+	err      error
+}
+
 var _ Coordinator = (*coordinator)(nil)
 
 func newLoopState() loopState {
@@ -51,11 +57,21 @@ func (current *coordinator) Run(ctx context.Context) error {
 		return err
 	}
 
+	modelContext, cancelModels := context.WithCancel(ctx)
+	defer cancelModels()
+	modelResponses := make(chan modelResponseResult)
+
 	operationUpdates := current.dependencies.Operations.Updates()
+	statuses, err := current.scheduleToolCalls(ctx)
+	if err != nil {
 		return err
 	}
 	if err := current.dispatchOperationsToManager(); err != nil {
 		return err
+	}
+		if err != nil {
+			return err
+		}
 	}
 
 	for {
@@ -73,11 +89,52 @@ func (current *coordinator) Run(ctx context.Context) error {
 			}
 			}
 
+				continue
+			}
+				return err
+			}
 		}
 
+		if err != nil {
 			return err
 		}
+			if err != nil {
+				return err
+			}
+		}
 	}
+}
+
+func (current *coordinator) requestModelResponse(
+	ctx context.Context,
+	results chan<- modelResponseResult,
+	built, err := current.dependencies.ContextBuilder.Build()
+	if err != nil {
+	}
+	turn := session.Turn{
+		ID:             session.TurnID(uuid.New().String()),
+		PreviousTurnID: current.state.currentTurnID,
+	}
+	item, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemTurn,
+		Data: turn,
+	})
+	if err != nil {
+	}
+	if err := current.storeItemInSessionStore(ctx, item); err != nil {
+	}
+
+	requestContext, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case results <- modelResponseResult{
+			turnID:   turn.ID,
+			response: response,
+			err:      err,
+		}:
+		case <-ctx.Done():
+		}
+	}()
 }
 
 	item, err := current.addItemToLocalState(sessionstore.Item{
@@ -91,13 +148,16 @@ func (current *coordinator) Run(ctx context.Context) error {
 func (current *coordinator) handleModelResponse(
 	ctx context.Context,
 	response sessionstore.ModelResponse,
+) ([]sessionstore.ToolCallStatus, error) {
 	item, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemModelResponse,
 		Data: response,
 	})
 	if err != nil {
+		return nil, err
 	}
 	if err := current.storeItemInSessionStore(ctx, item); err != nil {
+		return nil, err
 	}
 }
 
@@ -318,29 +378,51 @@ func (current *coordinator) addOperationToLocalState(
 	return current.state.operations[value.ID]
 }
 
+func (current *coordinator) scheduleToolCalls(
+	ctx context.Context,
+) ([]sessionstore.ToolCallStatus, error) {
+	statuses := make([]sessionstore.ToolCallStatus, 0)
 	for key, call := range current.state.toolCalls {
 		if call.status != nil {
 			continue
 		}
+		status, err := current.scheduleToolCall(ctx, key, call.toolCall)
+		if err != nil {
+			return nil, err
 		}
+		statuses = append(statuses, status)
 	}
+	return statuses, nil
 }
 
 func (current *coordinator) scheduleToolCall(
 	ctx context.Context,
 	key toolCallKey,
 	call llm.ToolCall,
+) (sessionstore.ToolCallStatus, error) {
 	translator, exists := current.dependencies.Tools.Resolve(call.Name)
 	toolContext := &toolCallContext{}
 	operations := make([]operation.Operation, 0, len(toolContext.operations))
 	for _, value := range toolContext.operations {
 		operations = append(operations, current.addOperationToLocalState(value))
 	}
+	toolCallStatus := sessionstore.ToolCallStatus{
+		TurnID:     key.turnID,
+		CallID:     key.callID,
+		Status:     status,
+		Operations: operations,
+	}
 	item, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemToolCallStatus,
+		Data: toolCallStatus,
 	})
 	if err != nil {
+		return sessionstore.ToolCallStatus{}, err
 	}
+	if err := current.storeItemInSessionStore(ctx, item); err != nil {
+		return sessionstore.ToolCallStatus{}, err
+	}
+	return toolCallStatus, nil
 }
 
 func (current *toolCallContext) Submit(spec operation.Spec) operation.ID {
@@ -350,6 +432,10 @@ func (current *toolCallContext) Submit(spec operation.Spec) operation.ID {
 	return id
 }
 
+func (current *coordinator) reconcileToolCalls(
+	ctx context.Context,
+) ([]sessionstore.ToolCallStatus, error) {
+	completed := make([]sessionstore.ToolCallStatus, 0)
 	for key := range current.state.toolCalls {
 		if !current.toolCallOperationsAreTerminal(key.turnID, key.callID) {
 			continue
@@ -361,14 +447,36 @@ func (current *toolCallContext) Submit(spec operation.Spec) operation.ID {
 		for _, id := range call.status.WaitingFor {
 			operations = append(operations, current.state.operations[id])
 		}
+		status := sessionstore.ToolCallStatus{
+			TurnID:     key.turnID,
+			CallID:     key.callID,
+			Status:     *call.status,
+			Operations: operations,
+		}
 		item, err := current.addItemToLocalState(sessionstore.Item{
 			Kind: sessionstore.ItemToolCallStatus,
+			Data: status,
 		})
 		if err != nil {
+			return nil, err
 		}
 		if err := current.storeItemInSessionStore(ctx, item); err != nil {
+			return nil, err
+		}
+		if _, exists := current.state.toolCalls[key]; !exists {
+			completed = append(completed, status)
 		}
 	}
+	return completed, nil
+}
+
+func toolCallStatusesRequireModelResponse(statuses []sessionstore.ToolCallStatus) bool {
+	for _, status := range statuses {
+		if status.Status.Error != "" || len(status.Status.WaitingFor) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (current *coordinator) storeItemInSessionStore(
