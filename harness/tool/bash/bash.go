@@ -18,6 +18,8 @@ type translator struct {
 	config Config
 }
 
+func New(config Config) tool.Translator {
+	return &translator{config: config}
 }
 
 func (translator *translator) Translate(ctx tool.Context, call llm.ToolCall) tool.CallStatus {

@@ -102,6 +102,7 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 		store,
 		newFakeOperationManager(),
 		builder,
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 
 	if err := current.restore(t.Context()); err != nil {
@@ -325,6 +326,7 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 		store,
 		newFakeOperationManager(),
 		builder,
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 
 	if err := current.restore(t.Context()); err != nil {
@@ -362,6 +364,7 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 				store,
 				newFakeOperationManager(),
 				contextbuilder.NewBuilder(),
+				tool.NewRegistry(tool.StaticTranslators{}),
 			)
 			err := current.restore(t.Context())
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -379,6 +382,7 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 		inputs,
 		operations,
 		builder,
+		tool.NewRegistry(tool.StaticTranslators{}),
 		adapter,
 	)
 	done := make(chan error, 1)
@@ -413,6 +417,7 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 		inputs,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 		adapter,
 	)
 
@@ -580,6 +585,7 @@ func TestCoordinatorRunDispatchesRestoredNonTerminalOperations(t *testing.T) {
 		inputs,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 		adapter,
 	)
 
@@ -615,6 +621,7 @@ func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
 		store,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 
 	err := current.Run(t.Context())
@@ -639,6 +646,7 @@ func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
 		inputs,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 
 	err := current.Run(t.Context())
@@ -655,6 +663,7 @@ func TestCoordinatorClonesOperationDataBeforeDispatch(t *testing.T) {
 		emptyFakeStore(),
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 	value := current.addOperationToLocalState(operation.Operation{
 		ID:          "operation-1",
@@ -684,6 +693,7 @@ func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.
 		inputs,
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 
 	err := current.Run(t.Context())
@@ -705,6 +715,7 @@ func TestCoordinatorRunReturnsOperationStoreErrorAfterUpdatingLocalState(t *test
 		inputs,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 
 	err := current.Run(t.Context())
@@ -725,6 +736,7 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 		store,
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 	event := externalEvent(t, 1, "input-1", "hello")
 	response := sessionstore.ModelResponse{

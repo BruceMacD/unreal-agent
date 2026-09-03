@@ -24,7 +24,9 @@ func (ctx *recordingContext) Submit(spec operation.Spec) operation.ID {
 func TestTranslatorSubmitsShellOperation(t *testing.T) {
 	config := bash.Config{
 	}
+	translator := bash.New(config)
 	ctx := &recordingContext{}
+	status := translator.Translate(ctx, llm.ToolCall{
 		CallID:    "call-1",
 		Name:      "Bash",
 		Arguments: `{"command":"  printf '%s' \"$HOME\"; exit 7  "}`,
@@ -76,6 +78,7 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 			status: operation.StatusFailed,
 		},
 	}
+	translator := bash.New(bash.Config{})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			state, err := json.Marshal(test.state)
@@ -100,6 +103,7 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 }
 
 func TestTranslatorTranslatesValidationErrorWithoutOperations(t *testing.T) {
+	translator := bash.New(bash.Config{})
 	ctx := &recordingContext{}
 	status := translator.Translate(ctx, llm.ToolCall{
 		CallID:    "call-1",
@@ -115,6 +119,7 @@ func TestTranslatorTranslatesValidationErrorWithoutOperations(t *testing.T) {
 	}
 }
 
+	translator := bash.New(bash.Config{})
 	}
 }
 
@@ -149,6 +154,7 @@ func TestTranslatorRejectsInvalidShellOperationResults(t *testing.T) {
 			want: "completed operation",
 		},
 	}
+	translator := bash.New(bash.Config{})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := translator.TranslateResult("call-1", tool.CallStatus{}, test.operations)
@@ -160,10 +166,12 @@ func TestTranslatorRejectsInvalidShellOperationResults(t *testing.T) {
 }
 
 func TestTranslatorAcceptsEmptyCommand(t *testing.T) {
+	translator := bash.New(bash.Config{
 		Shell:         "/bin/bash",
 		BaseDirectory: "/operations",
 	})
 	ctx := &recordingContext{}
+	status := translator.Translate(ctx, llm.ToolCall{Arguments: `{"command":""}`})
 
 	if status.Error != "" || len(status.WaitingFor) != 1 || len(ctx.specs) != 1 {
 		t.Fatalf("status = %#v, submitted specs = %d", status, len(ctx.specs))
@@ -171,6 +179,7 @@ func TestTranslatorAcceptsEmptyCommand(t *testing.T) {
 }
 
 func TestTranslatorRejectsInvalidArguments(t *testing.T) {
+	translator := bash.New(bash.Config{
 		Shell:         "/bin/bash",
 		BaseDirectory: "/operations",
 	})
@@ -189,6 +198,7 @@ func TestTranslatorRejectsInvalidArguments(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := &recordingContext{}
+			status := translator.Translate(ctx, llm.ToolCall{Arguments: test.arguments})
 			if !strings.Contains(status.Error, test.want) {
 				t.Fatalf("error = %q, want substring %q", status.Error, test.want)
 			}
@@ -200,7 +210,9 @@ func TestTranslatorRejectsInvalidArguments(t *testing.T) {
 }
 
 func TestTranslatorReturnsShellConfigurationError(t *testing.T) {
+	translator := bash.New(bash.Config{Shell: "bash", BaseDirectory: "/operations"})
 	ctx := &recordingContext{}
+	status := translator.Translate(ctx, llm.ToolCall{Arguments: `{"command":"pwd"}`})
 
 	if status.Error != "build Bash operation: shell path must be absolute" {
 		t.Fatalf("error = %q", status.Error)

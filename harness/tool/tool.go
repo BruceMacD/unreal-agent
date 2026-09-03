@@ -30,5 +30,14 @@ type Definition struct {
 type RegistrationID = uuid.UUID
 
 type Registry interface {
+	StaticDefinitions() []Definition
 	Resolve(string) (Translator, bool)
+	RegisterSkill(Skill) (RegistrationID, error)
+	UnregisterSkill(RegistrationID)
+	Skills() []Skill
+}
+
+type Skill struct {
+	Description string
+	Path        string
 }

@@ -184,6 +184,8 @@ func (manager *LocalOperationManager) appendLocalUpdate(operation Operation) {
 
 func advanceLocalOperation(current Operation, event *primitives.PrimitiveEvent) (Step, error) {
 	switch current.Type {
+	case TypeValue:
+		return AdvanceValue(current, event)
 	default:
 		return Step{}, fmt.Errorf(
 			"local operation manager does not support type %q: %w",
