@@ -140,6 +140,7 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 
 func TestBuilderPreservesToolResultPayload(t *testing.T) {
 	current := NewBuilder()
+	current.AddToolResult("call-1", output, false)
 
 	result, err := current.Build()
 	if err != nil {

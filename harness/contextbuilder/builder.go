@@ -8,6 +8,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
+
 type builder struct {
 }
 
@@ -53,7 +54,10 @@ func (current *builder) AddTool(tool llm.Tool) {
 
 func (current *builder) AddToolResult(
 	callID string,
+	running bool,
 ) {
+	if running {
+	}
 		Type: llm.ItemToolResult,
 		Data: llm.ToolResult{CallID: callID, Output: payload},
 	})

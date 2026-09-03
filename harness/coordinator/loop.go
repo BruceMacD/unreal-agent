@@ -375,10 +375,13 @@ func (current *coordinator) addToolResultToLocalState(
 	if err != nil {
 		return fmt.Errorf("add tool call %q result to context: %w", status.CallID, err)
 	}
+	running := !current.toolCallOperationsAreTerminal(status.TurnID, status.CallID)
 	current.dependencies.ContextBuilder.AddToolResult(
 		status.CallID,
 		result.Output,
+		running,
 	)
+	if !running {
 	}
 	return nil
 }
