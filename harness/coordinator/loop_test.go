@@ -73,6 +73,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 		response.Output[0],
 		response.Output[1],
 		}},
+	if !reflect.DeepEqual(built.Request.Input, wantInput) {
 		t.Fatalf("built request = %#v, want input %#v", built.Request, wantInput)
 	}
 	if !reflect.DeepEqual(store.itemRequests, []itemRequest{{After: 0, Limit: historyPageSize}}) {
