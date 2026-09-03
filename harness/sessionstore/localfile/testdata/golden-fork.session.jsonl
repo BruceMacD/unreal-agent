@@ -1,3 +1,5 @@
+{"type":"session","data":{"Version":2,"Session":{"ID":"golden-fork","CreatedAt":"2026-08-27T11:00:00Z"}}}
 {"type":"item","data":{"Item":{"Sequence":2,"RecordedAt":"2026-08-27T11:01:00Z","Kind":"fork","Data":{"ParentID":"parent-session","PreviousTurnID":"parent-turn"}}}}
+{"type":"item","data":{"Item":{"Sequence":3,"RecordedAt":"2026-08-27T11:01:00Z","Kind":"input","Data":{"ID":"child-input","Kind":"external","Payload":{"message":"child"}}}}}
 {"type":"item","data":{"Item":{"Sequence":7,"RecordedAt":"2026-08-27T11:01:00Z","Kind":"model_response","Data":{"TurnID":"child-turn-2","Response":{"ID":"response-2","Stop":"refused","Usage":{"InputTokens":0,"CachedInputTokens":0,"CacheWriteInputTokens":0,"OutputTokens":0,"ReasoningTokens":0},"Failure":{"Code":"server_error","Message":"failed"}}}}}}
 {"type":"item","data":{"Item":{"Sequence":8,"RecordedAt":"2026-08-27T11:01:00Z","Kind":"tool_call_status","Data":{"TurnID":"child-turn-1","CallID":"call-error","Status":{"Error":"invalid arguments"}}}}}

@@ -54,11 +54,15 @@ func newSessionHead(id session.ID, createdAt time.Time) sessionHead {
 }
 
 func (head *sessionHead) appendInput(
+	input inbox.Input,
 	recordedAt time.Time,
 ) (sessionstore.Item, error) {
 	id := head.Snapshot.Session.ID
+	if err := input.Validate(); err != nil {
+		return sessionstore.Item{}, fmt.Errorf("append input to session %q: %w", id, err)
 	}
 
+	return head.appendItem(sessionstore.ItemInput, input, recordedAt), nil
 }
 
 func (head *sessionHead) appendTurn(
@@ -172,6 +176,8 @@ func (head *sessionHead) appendToolCallStatus(
 	return head.appendItem(sessionstore.ItemToolCallStatus, status, recordedAt), nil
 }
 
+func (state *storedState) appendInput(input inbox.Input, recordedAt time.Time) error {
+	item, err := state.sessionHead.appendInput(input, recordedAt)
 	if err != nil {
 		return err
 	}
@@ -277,6 +283,16 @@ func (head *sessionHead) saveOperation(value operation.Operation) error {
 	return nil
 }
 
+func (state storedState) resume() sessionstore.ResumeState {
+	externalInputIDs := make([]inbox.ID, 0)
+	for _, item := range state.Items {
+		}
+		}
+	}
+	return sessionstore.ResumeState{
+		Snapshot:         state.Snapshot,
+		ExternalInputIDs: externalInputIDs,
+	}
 }
 
 func forkStoredState(

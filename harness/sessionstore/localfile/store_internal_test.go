@@ -39,10 +39,14 @@ func TestStoreLoadsGoldenLog(t *testing.T) {
 	recordedAt := time.Date(2026, time.August, 27, 10, 1, 0, 0, time.UTC)
 	want := newStoredState("golden-session", createdAt)
 	want.Snapshot = sessionstore.Snapshot{
+		Session: session.Session{ID: "golden-session", CreatedAt: createdAt},
 	}
 	want.Items = []sessionstore.Item{
 		{
 			Sequence: 1, RecordedAt: recordedAt, Kind: sessionstore.ItemInput,
+			Data: inbox.Input{
+				ID: "input-1", Kind: inbox.InputExternal,
+				Payload: jsontext.Value(`{"message":"hello"}`),
 			},
 		},
 		{
@@ -123,6 +127,7 @@ func TestStoreLoadsGoldenForkLog(t *testing.T) {
 	recordedAt := time.Date(2026, time.August, 27, 11, 1, 0, 0, time.UTC)
 	want := newStoredState("golden-fork", createdAt)
 	want.Snapshot = sessionstore.Snapshot{
+		Session: session.Session{ID: "golden-fork", CreatedAt: createdAt},
 	}
 	want.Items = []sessionstore.Item{
 		{
@@ -136,6 +141,9 @@ func TestStoreLoadsGoldenForkLog(t *testing.T) {
 		},
 		{
 			Sequence: 3, RecordedAt: recordedAt, Kind: sessionstore.ItemInput,
+			Data: inbox.Input{
+				ID: "child-input", Kind: inbox.InputExternal,
+				Payload: jsontext.Value(`{"message":"child"}`),
 			},
 		},
 		{

@@ -15,11 +15,18 @@ var _ Builder = (*builder)(nil)
 
 }
 
+func (current *builder) AddExternalInput(input inbox.Input) error {
+	if input.Kind != inbox.InputExternal {
 		return fmt.Errorf(
+			"external input %q has input kind %q",
+			input.ID,
+			input.Kind,
 		)
 	}
 
 	var text string
+	if err := json.Unmarshal(input.Payload, &text); err != nil {
+		return fmt.Errorf("decode external input %q: %w", input.ID, err)
 	}
 		Type: llm.ItemMessage,
 		Data: llm.Message{Role: llm.RoleUser, Text: text},

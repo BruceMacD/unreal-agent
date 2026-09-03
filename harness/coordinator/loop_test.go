@@ -42,6 +42,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{
 			Snapshot: sessionstore.Snapshot{
+				Session: session.Session{ID: "session-1"},
 			},
 		},
 		items: []sessionstore.Item{
@@ -54,6 +55,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 		},
 	}
 	builder := contextbuilder.NewBuilder()
+	current := newTestCoordinator(store, inputs, newFakeOperationManager(), builder, registry)
 
 	if err := current.restore(t.Context()); err != nil {
 		t.Fatal(err)
@@ -97,12 +99,14 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	)
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{
+			Session: session.Session{ID: "session-1"},
 		}},
 		items: items,
 	}
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		store,
+		inputs,
 		newFakeOperationManager(),
 		builder,
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -127,6 +131,38 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("replayed input = %#v, want %#v", built.Request.Input, want)
+	}
+}
+
+func TestCoordinatorReturnsSessionHistoryError(t *testing.T) {
+	store := emptyFakeStore()
+	store.itemsErr = errors.New("disk unavailable")
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+	)
+
+	err := current.Run(t.Context())
+	if err == nil || err.Error() != "load session history after 0: disk unavailable" {
+		t.Fatalf("restore error = %v", err)
+	}
+}
+
+func TestCoordinatorRejectsSessionHistoryWithoutProgress(t *testing.T) {
+	store := emptyFakeStore()
+	store.itemsPage = &sessionstore.Page{More: true, NextAfter: sessionstore.BeforeFirst}
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+	)
+
+	err := current.restore(t.Context())
+	if err == nil || err.Error() != "load session history did not advance after 0" {
+		t.Fatalf("restore error = %v", err)
 	}
 }
 
@@ -444,14 +480,125 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAcceptsOrphanedToolStatus(t *testing.T) {
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+	)
+	status := sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: "missing-call",
+		Status: tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+	}
+
+	item, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+		Data: status,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(item.Data, status) {
+		t.Fatalf("returned item = %#v, want %#v", item.Data, status)
+	}
+}
+
+func TestCoordinatorReturnsToolResultTranslationError(t *testing.T) {
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		registry,
+	)
+	current.addToolCallsToLocalState(sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: call,
+		}}},
+	})
+
+	_, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+		Data: sessionstore.ToolCallStatus{TurnID: "turn-1", CallID: call.CallID},
+	})
+	if err == nil || err.Error() != `add tool call "call-1" result to context: translation failed` {
+		t.Fatalf("add status error = %v", err)
+	}
+}
+
+func TestCoordinatorSkipsToolResultWithoutAvailableTranslator(t *testing.T) {
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+	)
+	call := llm.ToolCall{CallID: "call-1", Name: "unavailable-tool"}
+	current.addToolCallsToLocalState(sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: call,
+		}}},
+	})
+
+	if err := current.addToolResultToLocalState(sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := current.state.toolCalls[toolCallKey{turnID: "turn-1", callID: call.CallID}]; !exists {
+		t.Fatal("tool call with unavailable translator was removed")
+	}
+}
+
+func TestCoordinatorSkipsToolResultWithUntrackedOperation(t *testing.T) {
+	current := newTestCoordinator(
+		emptyFakeStore(),
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		registry,
+	)
+	current.addToolCallsToLocalState(sessionstore.ModelResponse{
+		TurnID: "turn-1",
+		Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall,
+			Data: call,
+		}}},
+	})
+	current.addOperationToLocalState(operation.Operation{
+		ID: "operation-1", Status: operation.StatusCompleted,
+	})
+
+	if err := current.addToolResultToLocalState(sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+		Status: tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := current.state.toolCalls[toolCallKey{turnID: "turn-1", callID: call.CallID}]; !exists {
+		t.Fatal("tool call with an untracked operation was removed")
+	}
+}
+
+func TestCoordinatorKeepsControlInputWithoutContextProjection(t *testing.T) {
+	input := inbox.Input{
 	}
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{
+			Session: session.Session{ID: "session-1"},
 		}},
+		items: []sessionstore.Item{storedItem(1, sessionstore.ItemInput, input)},
 	}
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		store,
+		inputs,
 		newFakeOperationManager(),
 		builder,
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -475,6 +622,15 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 		want string
 	}{
 		{name: "fork", item: storedItem(1, sessionstore.ItemFork, session.Turn{}), want: "want sessionstore.Fork"},
+		{name: "input", item: storedItem(1, sessionstore.ItemInput, session.Turn{}), want: "want inbox.Input"},
+		{
+			name: "invalid input",
+			item: storedItem(1, sessionstore.ItemInput, inbox.Input{
+				ID: "input-1", Kind: "unknown",
+			}),
+			want: "invalid input",
+		},
+		{name: "turn", item: storedItem(1, sessionstore.ItemTurn, inbox.Input{}), want: "want session.Turn"},
 		{name: "response", item: storedItem(1, sessionstore.ItemModelResponse, session.Turn{}), want: "want sessionstore.ModelResponse"},
 		{name: "status", item: storedItem(1, sessionstore.ItemToolCallStatus, session.Turn{}), want: "want sessionstore.ToolCallStatus"},
 		{name: "kind", item: storedItem(1, "unknown", nil), want: `unsupported item kind "unknown"`},
@@ -518,6 +674,7 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 		defer orderMutex.Unlock()
 		order = append(order, value)
 	}
+	store.onAppendInput = func(inbox.Input) { record("input") }
 	store.onAppendTurn = func(session.Turn) { record("turn") }
 	adapter := &fakeAdapter{respond: func(
 		ctx context.Context,
@@ -558,6 +715,8 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 	if !reflect.DeepEqual(request, built.Request) {
 		t.Fatalf("model request = %#v, want %#v", request, built.Request)
 	}
+	if !reflect.DeepEqual(store.appendedInputs, []inbox.Input{event}) {
+		t.Fatalf("appended inputs = %#v, want %#v", store.appendedInputs, []inbox.Input{event})
 	}
 	if len(store.appendedTurns) != 1 || store.appendedTurns[0].ID == "" ||
 		store.appendedTurns[0].PreviousTurnID != "previous-turn" {
@@ -606,6 +765,7 @@ func TestCoordinatorRunDoesNotCallModelWhenRequestBuildFails(t *testing.T) {
 	if err == nil || err.Error() != "build model request: context unavailable" {
 		t.Fatalf("Run error = %v", err)
 	}
+	if !reflect.DeepEqual(store.appendedInputs, []inbox.Input{event}) ||
 		len(store.appendedTurns) != 0 || len(adapter.requestSnapshot()) != 0 {
 		t.Fatalf(
 			"effects after build failure: inputs=%v turns=%v requests=%v",
@@ -1302,6 +1462,7 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 	)
 
 	err = current.Run(t.Context())
+	if err == nil || err.Error() != "inbox output closed" {
 		t.Fatalf("Run error = %v, want closed inbox error", err)
 	}
 	if !reflect.DeepEqual(translator.calls, []llm.ToolCall{missing}) {
@@ -1381,6 +1542,26 @@ func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testin
 		t.Fatalf("statuses = %#v, turns = %#v", store.appendedStatuses, store.appendedTurns)
 	}
 		t.Fatalf("corrective request = %#v", request)
+	}
+}
+
+func TestCoordinatorRunRejectsExternalInputWithoutTextPayload(t *testing.T) {
+	store := emptyFakeStore()
+		ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
+	current := newTestCoordinator(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+	)
+
+	err := current.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), `add input "input-1" to context`) {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(store.appendedInputs) != 0 {
+		t.Fatalf("stored inputs = %#v", store.appendedInputs)
 	}
 }
 
@@ -1509,6 +1690,50 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	}
 }
 
+func TestCoordinatorRunReturnsReconciliationError(t *testing.T) {
+	value := operation.Operation{
+		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
+	}
+	status := sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+		Status: tool.CallStatus{WaitingFor: []operation.ID{value.ID}},
+	}
+	store := emptyFakeStore()
+	store.items = []sessionstore.Item{
+		storedItem(1, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
+			TurnID: "turn-1",
+			Response: llm.Response{Output: []llm.Item{{
+				Type: llm.ItemToolCall,
+				Data: call,
+			}}},
+		}),
+		storedItem(2, sessionstore.ItemToolCallStatus, status),
+		storedItem(3, sessionstore.ItemToolCallStatus, sessionstore.ToolCallStatus{
+			TurnID: "another-turn",
+			CallID: "another-call",
+		}),
+	}
+	completed := value
+	completed.Status = operation.StatusCompleted
+	operations := newFakeOperationManager()
+	operations.updates <- completed
+	current := newTestCoordinator(
+		store,
+		operations,
+		contextbuilder.NewBuilder(),
+		registry,
+	)
+
+	err := current.Run(t.Context())
+	if err == nil || err.Error() != `add tool call "call-1" result to context: terminal result failed` {
+		t.Fatalf("Run error = %v", err)
+	}
+	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{completed}) {
+		t.Fatalf("saved operations = %#v, want %#v", store.savedOperations, []operation.Operation{completed})
+	}
+}
+
 func TestCoordinatorDoesNotCompleteToolCallBeforeOperationIsStored(t *testing.T) {
 	store := emptyFakeStore()
 	store.saveOperationErr = errors.New("disk unavailable")
@@ -1585,6 +1810,7 @@ func TestCoordinatorRunDispatchesRestoredNonTerminalOperations(t *testing.T) {
 	)
 
 	err := current.Run(t.Context())
+	if err == nil || err.Error() != "inbox output closed" {
 		t.Fatalf("Run error = %v, want closed inbox error", err)
 	}
 	sort.Slice(operations.adds, func(left, right int) bool {
@@ -1769,6 +1995,7 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 		}
 	}
 
+	if !reflect.DeepEqual(store.appendedInputs, []inbox.Input{event}) ||
 		!reflect.DeepEqual(store.appendedTurns, []session.Turn{turn}) ||
 		!reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{response}) ||
 		!reflect.DeepEqual(store.appendedStatuses, []sessionstore.ToolCallStatus{status}) {
@@ -1781,7 +2008,80 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 	}
 }
 
+func TestCoordinatorReturnsSessionItemStoreErrors(t *testing.T) {
+	response := sessionstore.ModelResponse{TurnID: turn.ID}
+	status := sessionstore.ToolCallStatus{
+		TurnID: turn.ID,
+		CallID: "call-1",
+		Status: tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+	}
+	tests := []struct {
+		name      string
+		item      sessionstore.Item
+		configure func(*fakeStore, *coordinator)
+		want      string
+	}{
+		{
+			name: "turn",
+			item: sessionstore.Item{Kind: sessionstore.ItemTurn, Data: turn},
+			configure: func(store *fakeStore, _ *coordinator) {
+				store.appendTurnErr = errors.New("disk unavailable")
+			},
+			want: `store turn "turn-1": disk unavailable`,
+		},
+		{
+			name: "model response",
+			item: sessionstore.Item{Kind: sessionstore.ItemModelResponse, Data: response},
+			configure: func(store *fakeStore, _ *coordinator) {
+				store.appendModelResponseErr = errors.New("disk unavailable")
+			},
+			want: `store turn "turn-1" response: disk unavailable`,
+		},
+		{
+			name: "tool status",
+			item: sessionstore.Item{Kind: sessionstore.ItemToolCallStatus, Data: status},
+			configure: func(store *fakeStore, _ *coordinator) {
+				store.appendStatusErr = errors.New("disk unavailable")
+			},
+			want: `store tool call "call-1" status: disk unavailable`,
+		},
+		{
+			name: "unsupported item",
+			item: sessionstore.Item{Kind: sessionstore.ItemFork, Data: sessionstore.Fork{}},
+			configure: func(*fakeStore, *coordinator) {
+			},
+			want: `unsupported local item kind "fork"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := emptyFakeStore()
+			current := newTestCoordinator(
+				store,
+				newFakeOperationManager(),
+				contextbuilder.NewBuilder(),
+				tool.NewRegistry(tool.StaticTranslators{}),
+			)
+			test.configure(store, current)
+
+			err := current.storeItemInSessionStore(t.Context(), test.item)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("store error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestCoordinatorRunReturnsContextCancellation(t *testing.T) {
+}
+
+func TestClosedInputErrorPrefersContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := closedInputError(ctx, "input"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("closed input error = %v, want context cancellation", err)
+	}
 }
 
 func newTestCoordinator(
@@ -1810,6 +2110,7 @@ func newTestCoordinatorWithAdapter(
 	return New(Dependencies{
 		SessionID:      "session-1",
 		Inbox:          inputs,
+		Restored:       store.resume,
 		Sessions:       store,
 		ContextBuilder: builder,
 		LLM:            adapter,
@@ -1824,11 +2125,13 @@ func emptyFakeStore() *fakeStore {
 	}}}
 }
 
+func externalEvent(t *testing.T, _ int, id inbox.ID, text string) inbox.Input {
 	t.Helper()
 	payload, err := json.Marshal(text)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return inbox.Input{ID: id, Kind: inbox.InputExternal, Payload: payload}
 }
 
 func storedItem(sequence sessionstore.Sequence, kind sessionstore.ItemKind, data any) sessionstore.Item {
@@ -1893,6 +2196,40 @@ func (operationStatusTranslator) TranslateResult(
 	}
 }
 
+type failingResultTranslator struct {
+	err error
+}
+
+func (failingResultTranslator) Translate(tool.Context, llm.ToolCall) tool.CallStatus {
+	return tool.CallStatus{}
+}
+
+func (translator failingResultTranslator) TranslateResult(
+	string,
+	tool.CallStatus,
+	[]operation.Operation,
+) (llm.ToolResult, error) {
+	return llm.ToolResult{}, translator.err
+}
+
+type terminalResultTranslator struct{}
+
+func (terminalResultTranslator) Translate(tool.Context, llm.ToolCall) tool.CallStatus {
+	return tool.CallStatus{}
+}
+
+func (terminalResultTranslator) TranslateResult(
+	_ string,
+	_ tool.CallStatus,
+	operations []operation.Operation,
+) (llm.ToolResult, error) {
+	for _, value := range operations {
+		if operationIsTerminal(value.Status) {
+			return llm.ToolResult{}, errors.New("terminal result failed")
+		}
+	}
+}
+
 type itemRequest struct {
 	After sessionstore.Sequence
 	Limit int
@@ -1901,7 +2238,10 @@ type itemRequest struct {
 type fakeStore struct {
 	resume                 sessionstore.ResumeState
 	items                  []sessionstore.Item
+	itemsErr               error
+	itemsPage              *sessionstore.Page
 	itemRequests           []itemRequest
+	appendedInputs         []inbox.Input
 	appendedTurns          []session.Turn
 	appendedResponses      []sessionstore.ModelResponse
 	appendedStatuses       []sessionstore.ToolCallStatus
@@ -1909,8 +2249,10 @@ type fakeStore struct {
 	appendInputErr         error
 	appendTurnErr          error
 	appendModelResponseErr error
+	appendStatusErr        error
 	saveOperationErr       error
 	unexpectedMutations    []string
+	onAppendInput          func(inbox.Input)
 	onAppendTurn           func(session.Turn)
 	onAppendModelResponse  func(sessionstore.ModelResponse)
 	onAppendToolCallStatus func(sessionstore.ToolCallStatus)
@@ -1933,6 +2275,12 @@ func (store *fakeStore) Items(
 	limit int,
 ) (sessionstore.Page, error) {
 	store.itemRequests = append(store.itemRequests, itemRequest{After: after, Limit: limit})
+	if store.itemsErr != nil {
+		return sessionstore.Page{}, store.itemsErr
+	}
+	if store.itemsPage != nil {
+		return *store.itemsPage, nil
+	}
 	start := sort.Search(len(store.items), func(index int) bool {
 		return store.items[index].Sequence > after
 	})
@@ -1945,7 +2293,10 @@ func (store *fakeStore) Items(
 	return sessionstore.Page{Items: items, NextAfter: next, More: end < len(store.items)}, nil
 }
 
+func (store *fakeStore) AppendInput(_ context.Context, _ session.ID, input inbox.Input) error {
+	store.appendedInputs = append(store.appendedInputs, input)
 	if store.onAppendInput != nil {
+		store.onAppendInput(input)
 	}
 	return store.appendInputErr
 }
@@ -1979,6 +2330,7 @@ func (store *fakeStore) AppendToolCallStatus(
 	if store.onAppendToolCallStatus != nil {
 		store.onAppendToolCallStatus(status)
 	}
+	return store.appendStatusErr
 }
 
 func (store *fakeStore) SaveOperation(

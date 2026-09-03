@@ -26,7 +26,12 @@ var (
 
 func TestStoredStateLifecycle(t *testing.T) {
 	state := newStoredState("session-1", stateCreatedAt)
+	input := inbox.Input{
+		ID:      "input-1",
+		Kind:    inbox.InputExternal,
+		Payload: jsontext.Value(`{"message":"hello"}`),
 	}
+	if err := state.appendInput(input, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 		t.Fatal(err)
@@ -80,6 +85,29 @@ func TestStoredStateLifecycle(t *testing.T) {
 		t.Fatalf("first recorded time = %v, want %v", state.Items[0].RecordedAt, stateUpdatedAt)
 	}
 	resume := state.resume()
+	}
+	if !reflect.DeepEqual(resume.ExternalInputIDs, []inbox.ID{"input-1"}) {
+		t.Fatalf("external input IDs = %#v", resume.ExternalInputIDs)
+	}
+}
+
+func TestResumeReturnsOnlyExternalInputIDs(t *testing.T) {
+	state := newStoredState("session-1", stateCreatedAt)
+	for _, input := range []inbox.Input{
+		{ID: "external-1", Kind: inbox.InputExternal},
+		{ID: "crash-1", Kind: inbox.InputCrash},
+		{ID: "external-2", Kind: inbox.InputExternal},
+	} {
+		if err := state.appendInput(input, stateUpdatedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := state.resume().ExternalInputIDs; !reflect.DeepEqual(
+		got,
+		[]inbox.ID{"external-1", "external-2"},
+	) {
+		t.Fatalf("external input IDs = %#v", got)
 	}
 }
 
@@ -204,12 +232,15 @@ func TestRejectedStateTransitionsDoNotMutateState(t *testing.T) {
 			name:  "empty input ID",
 			state: emptyTestState,
 			apply: func(state *storedState) error {
+				return state.appendInput(inbox.Input{}, stateUpdatedAt)
 			},
 		},
 		{
 			name:  "invalid input JSON",
 			state: emptyTestState,
 			apply: func(state *storedState) error {
+				return state.appendInput(inbox.Input{
+					ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{`),
 				}, stateUpdatedAt)
 			},
 		},
@@ -422,6 +453,8 @@ func TestValidateOperation(t *testing.T) {
 
 func TestForkStoredStateUsesLastRecordForTurn(t *testing.T) {
 	parent := newStoredState("parent", stateCreatedAt)
+	if err := parent.appendInput(inbox.Input{
+		ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -437,6 +470,8 @@ func TestForkStoredStateUsesLastRecordForTurn(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	if err := parent.appendInput(inbox.Input{
+		ID: "input-2", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +489,7 @@ func TestForkStoredStateUsesLastRecordForTurn(t *testing.T) {
 	if !reflect.DeepEqual(parent, before) {
 		t.Fatal("fork changed parent state")
 	}
+	if child.Snapshot.Session.ID != "child" {
 		t.Fatalf("child snapshot = %#v", child.Snapshot)
 	}
 	if len(child.Items) != 5 || child.Items[3].Kind != sessionstore.ItemToolCallStatus ||
@@ -520,6 +556,8 @@ func TestForkStoredStatePreservesInterleavedPrefix(t *testing.T) {
 	if err := parent.appendModelResponse(validResponse("turn-1"), stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
+	if err := parent.appendInput(inbox.Input{
+		ID: "steering", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}

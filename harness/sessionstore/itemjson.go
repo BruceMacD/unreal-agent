@@ -43,6 +43,12 @@ func (item Item) validateData() error {
 			return fmt.Errorf("fork data must be sessionstore.Fork, got %T", item.Data)
 		}
 	case ItemInput:
+		input, ok := item.Data.(inbox.Input)
+		if !ok {
+			return fmt.Errorf("input data must be inbox.Input, got %T", item.Data)
+		}
+		if err := input.Validate(); err != nil {
+			return fmt.Errorf("invalid input data: %w", err)
 		}
 	case ItemTurn:
 		if _, ok := item.Data.(session.Turn); !ok {
@@ -74,7 +80,11 @@ func decodeItemData(kind ItemKind, encoded jsontext.Value) (any, error) {
 		}
 		return value, nil
 	case ItemInput:
+		var value inbox.Input
 		if err := json.Unmarshal(encoded, &value); err != nil {
+			return nil, fmt.Errorf("decode input data: %w", err)
+		}
+		if err := value.Validate(); err != nil {
 			return nil, fmt.Errorf("decode input data: %w", err)
 		}
 		return value, nil

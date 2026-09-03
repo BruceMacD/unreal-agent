@@ -101,10 +101,12 @@ func (store *Store) Items(
 	}, nil
 }
 
+func (store *Store) AppendInput(ctx context.Context, id session.ID, input inbox.Input) error {
 	head, committedSize, err := store.loadWriteState(ctx, id)
 	if err != nil {
 		return err
 	}
+	item, err := head.appendInput(input, time.Now().UTC())
 	if err != nil {
 		return err
 	}

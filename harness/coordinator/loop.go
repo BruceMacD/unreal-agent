@@ -61,6 +61,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 	defer cancelModels()
 	modelResponses := make(chan modelResponseResult)
 
+	inboxOutput := current.dependencies.Inbox.Output()
 	operationUpdates := current.dependencies.Operations.Updates()
 	statuses, err := current.scheduleToolCalls(ctx)
 	if err != nil {
@@ -80,6 +81,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			return ctx.Err()
 
 			if !open {
+				return closedInputError(ctx, "inbox output")
 			}
 				return err
 			}
@@ -137,8 +139,10 @@ func (current *coordinator) requestModelResponse(
 	}()
 }
 
+func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.Input) error {
 	item, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemInput,
+		Data: input,
 	})
 	if err != nil {
 		return err
@@ -217,13 +221,21 @@ func (current *coordinator) addItemToLocalState(
 		}
 
 	case sessionstore.ItemInput:
+		input, ok := item.Data.(inbox.Input)
 		if !ok {
 			return sessionstore.Item{}, fmt.Errorf(
+				"input data is %T, want inbox.Input",
 				item.Data,
 			)
 		}
+		if err := input.Validate(); err != nil {
+			return sessionstore.Item{}, fmt.Errorf("invalid input: %w", err)
+		}
+		if input.Kind == inbox.InputExternal {
+			if err := current.dependencies.ContextBuilder.AddExternalInput(input); err != nil {
 				return sessionstore.Item{}, fmt.Errorf(
 					"add input %q to context: %w",
+					input.ID,
 					err,
 				)
 			}
@@ -485,10 +497,13 @@ func (current *coordinator) storeItemInSessionStore(
 ) error {
 	switch item.Kind {
 	case sessionstore.ItemInput:
+		input := item.Data.(inbox.Input)
 		if err := current.dependencies.Sessions.AppendInput(
 			ctx,
 			current.dependencies.SessionID,
+			input,
 		); err != nil {
+			return fmt.Errorf("store input %q: %w", input.ID, err)
 		}
 
 	case sessionstore.ItemTurn:

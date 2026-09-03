@@ -43,7 +43,12 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode input: %v", err)
 	}
+	input := inbox.Input{
+		ID:      "input-1",
+		Kind:    inbox.InputExternal,
+		Payload: payload,
 	}
+	if err := store.AppendInput(t.Context(), snapshot.Session.ID, input); err != nil {
 		t.Fatalf("append input: %v", err)
 	}
 	if err := store.AppendTurn(t.Context(), snapshot.Session.ID, turn); err != nil {
@@ -130,6 +135,9 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 			t.Fatalf("item %d has a zero recorded time", index)
 		}
 	}
+	gotInput := items[0].Data.(inbox.Input)
+	if !reflect.DeepEqual(gotInput, input) {
+		t.Fatalf("input = %#v, want %#v", gotInput, input)
 	}
 	gotResponse := items[2].Data.(sessionstore.ModelResponse)
 	if !reflect.DeepEqual(gotResponse, response) {
@@ -143,6 +151,9 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 		t.Fatalf("resume reopened session: %v", err)
 	}
 	}
+	if !reflect.DeepEqual(resume.ExternalInputIDs, []inbox.ID{"input-1"}) {
+		t.Fatalf("external input IDs = %#v", resume.ExternalInputIDs)
+	}
 
 	afterEnd, err := reopened.Items(t.Context(), snapshot.Session.ID, 100, 10)
 	if err != nil {
@@ -150,6 +161,17 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 	}
 	if len(afterEnd.Items) != 0 || afterEnd.NextAfter != 100 || afterEnd.More {
 		t.Fatalf("page after end = %#v", afterEnd)
+	}
+}
+
+func TestStoreRejectsLegacySessionResume(t *testing.T) {
+	store := newStore(t, "testdata")
+	_, err := store.Resume(t.Context(), "legacy-session")
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"legacy session format version 1 cannot be resumed",
+	) {
+		t.Fatalf("Resume error = %v", err)
 	}
 }
 
@@ -287,6 +309,8 @@ func TestReopenedStoreContinuesFromDerivedWriteState(t *testing.T) {
 	if _, err := store.Create(t.Context(), "session-1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.AppendInput(t.Context(), "session-1", inbox.Input{
+		ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -312,6 +336,8 @@ func TestReopenedStoreContinuesFromDerivedWriteState(t *testing.T) {
 	if err := reopened.SaveOperation(t.Context(), "session-1", updated); err != nil {
 		t.Fatal(err)
 	}
+	if err := reopened.AppendInput(t.Context(), "session-1", inbox.Input{
+		ID: "input-2", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +351,7 @@ func TestReopenedStoreContinuesFromDerivedWriteState(t *testing.T) {
 		sessionstore.ItemInput,
 		sessionstore.ItemTurn,
 	)
+	_, err := verifier.Inspect(t.Context(), "session-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,6 +497,8 @@ func TestCreateReplacesPopulatedSession(t *testing.T) {
 	directory := t.TempDir()
 	store := newStore(t, directory)
 	createSessionWithTurn(t, store, "session-1", "old-turn", "")
+	if err := store.AppendInput(t.Context(), "session-1", inbox.Input{
+		ID: "old-input", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -497,6 +526,7 @@ func TestCreateReplacesPopulatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(got, replaced) {
 		t.Fatalf("replacement snapshot = %#v, want %#v", got, replaced)
 	}
 	page, err := reopened.Items(t.Context(), "session-1", sessionstore.BeforeFirst, 100)
@@ -612,6 +642,8 @@ func TestForkCopiesHistoryThroughTurnWithoutOperations(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append parent status: %v", err)
 	}
+	if err := store.AppendInput(t.Context(), "parent", inbox.Input{
+		ID: "next-input", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}); err != nil {
 		t.Fatalf("append later input: %v", err)
 	}
@@ -626,6 +658,7 @@ func TestForkCopiesHistoryThroughTurnWithoutOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fork: %v", err)
 	}
+	if snapshot.Session.ID != "child" {
 		t.Fatalf("fork snapshot = %#v", snapshot)
 	}
 	page, err := store.Items(t.Context(), "child", sessionstore.BeforeFirst, 100)
@@ -656,6 +689,8 @@ func TestForkCopiesHistoryThroughTurnWithoutOperations(t *testing.T) {
 	}
 	}
 
+	if err := store.AppendInput(t.Context(), "child", inbox.Input{
+		ID: "child-input", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 	}); err != nil {
 		t.Fatalf("append child input: %v", err)
 	}
@@ -919,6 +954,8 @@ func TestMissingSessionsFailEveryReadModifyWriteMethod(t *testing.T) {
 		{
 			name: "append input",
 			call: func() error {
+				return store.AppendInput(t.Context(), "missing", inbox.Input{
+					ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 				})
 			},
 		},
@@ -979,7 +1016,9 @@ func TestRejectedPublicTransitionsDoNotChangePersistedState(t *testing.T) {
 		call func(*localfile.Store) error
 	}{
 		{
+			name: "empty input ID",
 			call: func(store *localfile.Store) error {
+				return store.AppendInput(t.Context(), "session-1", inbox.Input{})
 			},
 		},
 		{
@@ -1185,6 +1224,8 @@ func TestForkReportsParentTurnFailuresAndReplacesDestination(t *testing.T) {
 		}
 		}
 
+		if err := store.AppendInput(t.Context(), "child", inbox.Input{
+			ID: "child-input", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 		}); err != nil {
 			t.Fatal(err)
 		}

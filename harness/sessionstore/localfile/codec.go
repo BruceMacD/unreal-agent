@@ -12,6 +12,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 )
 
+const formatVersion = 2
 
 type recordType string
 
@@ -110,6 +111,11 @@ func decodeLog(encoded []byte) (storedState, int64, error) {
 			if err := json.Unmarshal(record.Data, &header); err != nil {
 				return storedState{}, 0, fmt.Errorf("decode session record: %w", err)
 			}
+			if header.Version == 1 {
+				return storedState{}, 0, fmt.Errorf(
+					"legacy session format version 1 cannot be resumed",
+				)
+			}
 			if header.Version != formatVersion {
 				return storedState{}, 0, fmt.Errorf("unsupported session format version %d", header.Version)
 			}
@@ -202,6 +208,7 @@ func decodeLog(encoded []byte) (storedState, int64, error) {
 func replayItem(state *storedState, record itemRecord) error {
 	switch record.Item.Kind {
 	case sessionstore.ItemInput:
+		return state.appendInput(record.Item.Data.(inbox.Input), record.Item.RecordedAt)
 	case sessionstore.ItemTurn:
 		return state.appendTurn(record.Item.Data.(session.Turn), record.Item.RecordedAt)
 	case sessionstore.ItemModelResponse:

@@ -10,14 +10,17 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
+func TestBuilderAddsExternalInputAsUserMessage(t *testing.T) {
 	payload, err := json.Marshal("Hello")
 	if err != nil {
 		t.Fatal(err)
 	}
 	current := NewBuilder()
+	if err := current.AddExternalInput(inbox.Input{
 		ID:      "input-1",
 		Kind:    inbox.InputExternal,
 		Payload: payload,
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,6 +35,7 @@ import (
 	}
 }
 
+func TestBuilderRejectsInvalidExternalInput(t *testing.T) {
 	tests := []struct {
 		name  string
 		input inbox.Input
@@ -40,17 +44,20 @@ import (
 		{
 			name:  "wrong kind",
 			input: inbox.Input{ID: "input-1", Kind: inbox.InputControl},
+			want:  `external input "input-1" has input kind "control"`,
 		},
 		{
 			name: "invalid payload",
 			input: inbox.Input{
 				ID: "input-1", Kind: inbox.InputExternal, Payload: []byte(`{`),
 			},
+			want: `decode external input "input-1"`,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			current := NewBuilder()
+			err := current.AddExternalInput(test.input)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}

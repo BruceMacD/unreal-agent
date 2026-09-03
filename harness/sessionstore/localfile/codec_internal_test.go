@@ -69,6 +69,7 @@ func TestEncodeInitialLogRejectsInvalidItems(t *testing.T) {
 			name: "wrong data type",
 			item: sessionstore.Item{
 				Sequence: 1, RecordedAt: stateUpdatedAt,
+				Kind: sessionstore.ItemTurn, Data: inbox.Input{},
 			},
 			want: "turn data must be session.Turn",
 		},
@@ -100,6 +101,9 @@ func TestEncodeInitialLogRejectsInvalidItems(t *testing.T) {
 
 func TestEncodeInitialLogEmbedsJSONValues(t *testing.T) {
 	state := newStoredState("session-1", stateCreatedAt)
+	if err := state.appendInput(inbox.Input{
+		ID: "input-1", Kind: inbox.InputExternal,
+		Payload: jsontext.Value(`{"input":true}`),
 	}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +199,7 @@ func TestDecodeLogIgnoresIncompleteTail(t *testing.T) {
 	}
 }
 
+func TestDecodeLogPreservesInheritedInput(t *testing.T) {
 	encoded := emptyLog(t)
 	encoded = append(encoded, mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
 		Sequence: 1, RecordedAt: stateUpdatedAt,
@@ -202,6 +207,8 @@ func TestDecodeLogIgnoresIncompleteTail(t *testing.T) {
 	encoded = append(encoded, mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
 		Sequence: 2, RecordedAt: stateUpdatedAt,
 		Kind: sessionstore.ItemInput,
+		Data: inbox.Input{
+			ID: "parent-input", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
 		},
 	}})...)
 	encoded = append(encoded, mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
@@ -214,6 +221,8 @@ func TestDecodeLogIgnoresIncompleteTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := state.Items[1].Data.(inbox.Input).ID; got != "parent-input" {
+		t.Fatalf("inherited input ID = %q, want parent-input", got)
 	}
 }
 
@@ -270,6 +279,13 @@ func TestDecodeLogRejectsInvalidRecords(t *testing.T) {
 			name:    "malformed session data",
 			encoded: mustRecord(t, recordSession, jsontext.Value(`[]`)),
 			want:    "decode session record",
+		},
+		{
+			name: "legacy version",
+			encoded: mustRecord(t, recordSession, sessionRecord{
+				Version: 1, Session: session.Session{ID: "session-1", CreatedAt: stateCreatedAt},
+			}),
+			want: "legacy session format version 1 cannot be resumed",
 		},
 		{
 			name: "unsupported version",

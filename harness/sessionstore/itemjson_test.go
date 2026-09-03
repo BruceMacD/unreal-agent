@@ -21,6 +21,9 @@ func TestItemJSONRoundTrip(t *testing.T) {
 		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemFork, Data: Fork{
 			ParentID: "parent", PreviousTurnID: "turn-1",
 		}},
+		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemInput, Data: inbox.Input{
+			ID: "input-1", Kind: inbox.InputExternal,
+			Payload: jsontext.Value(`{"message":"hello"}`),
 		}},
 		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemModelResponse, Data: ModelResponse{
 			TurnID: "turn-1",
@@ -76,6 +79,8 @@ func TestItemJSONRejectsInvalidTagAndData(t *testing.T) {
 		want string
 	}{
 		{item: Item{Kind: ItemFork, Data: session.Turn{}}, want: "sessionstore.Fork"},
+		{item: Item{Kind: ItemInput, Data: session.Turn{}}, want: "inbox.Input"},
+		{item: Item{Kind: ItemTurn, Data: inbox.Input{}}, want: "session.Turn"},
 		{item: Item{Kind: ItemModelResponse, Data: session.Turn{}}, want: "sessionstore.ModelResponse"},
 		{item: Item{Kind: ItemToolCallStatus, Data: session.Turn{}}, want: "sessionstore.ToolCallStatus"},
 		{item: Item{Kind: "unknown", Data: struct{}{}}, want: `unsupported item kind "unknown"`},

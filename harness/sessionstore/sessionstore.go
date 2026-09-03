@@ -27,6 +27,7 @@ const (
 	ItemToolCallStatus ItemKind = "tool_call_status"
 )
 
+// Item Data is Fork, inbox.Input, session.Turn, ModelResponse, or
 // ToolCallStatus according to Kind.
 type Item struct {
 	Sequence   Sequence
@@ -53,6 +54,7 @@ type ToolCallStatus struct {
 }
 
 type Snapshot struct {
+	Session session.Session
 }
 
 type Page struct {
@@ -62,6 +64,8 @@ type Page struct {
 }
 
 type ResumeState struct {
+	Snapshot         Snapshot
+	ExternalInputIDs []inbox.ID
 }
 
 // Store does not serialize methods for the same session ID.
@@ -69,6 +73,7 @@ type Store interface {
 	Create(context.Context, session.ID) (Snapshot, error)
 	Inspect(context.Context, session.ID) (Snapshot, error)
 	Items(context.Context, session.ID, Sequence, int) (Page, error)
+	AppendInput(context.Context, session.ID, inbox.Input) error
 	AppendTurn(context.Context, session.ID, session.Turn) error
 	AppendModelResponse(context.Context, session.ID, ModelResponse) error
 	// AppendToolCallStatus appends the status and its operation snapshots.
