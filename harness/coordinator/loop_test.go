@@ -57,6 +57,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if current.state.currentTurnID != turn.ID ||
 		!reflect.DeepEqual(current.state.operations[resumedOperation.ID], resumedOperation) {
 		t.Fatalf("restored state = %#v", current.state)
 	}
@@ -115,6 +116,9 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}) {
 		t.Fatalf("item requests = %#v", store.itemRequests)
 	}
+	if current.state.currentTurnID != "turn-256" {
+		t.Fatalf("current turn ID = %q, want %q", current.state.currentTurnID, "turn-256")
+	}
 	built, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +128,7 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 }
 
+func TestCoordinatorKeepsUnreplayableToolStatusInLocalState(t *testing.T) {
 	status := sessionstore.ToolCallStatus{
 		TurnID: turn.ID,
 		CallID: call.CallID,
@@ -153,6 +158,12 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	if err := current.restore(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	callState, exists := current.state.toolCalls[toolCallKey{
+		turnID: status.TurnID,
+		callID: status.CallID,
+	}]
+	if !exists || callState.status == nil || !reflect.DeepEqual(*callState.status, status.Status) {
+		t.Fatalf("tool call state = %#v", callState)
 	}
 	built, err := builder.Build()
 	if err != nil {
@@ -336,11 +347,13 @@ func TestCoordinatorTracksToolCalls(t *testing.T) {
 	}
 
 	waitingFor := []operation.ID{"operation-1", "operation-2"}
+	waitingStatus := tool.CallStatus{WaitingFor: waitingFor}
 	if _, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemToolCallStatus,
 		Data: sessionstore.ToolCallStatus{
 			TurnID: "turn-2",
 			CallID: second.CallID,
+			Status: waitingStatus,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -348,6 +361,7 @@ func TestCoordinatorTracksToolCalls(t *testing.T) {
 	want = map[toolCallKey]toolCallState{
 		{turnID: "turn-2", callID: second.CallID}: {
 			toolCall: second,
+			status:   &waitingStatus,
 			operations: map[operation.ID]struct{}{
 				waitingFor[0]: {},
 				waitingFor[1]: {},
@@ -1013,6 +1027,15 @@ func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.
 	err := current.Run(t.Context())
 	if err == nil || err.Error() != `store input "input-1": disk unavailable` {
 		t.Fatalf("Run error = %v", err)
+	}
+	built, buildErr := current.dependencies.ContextBuilder.Build()
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+		Type: llm.ItemMessage,
+		Data: llm.Message{Role: llm.RoleUser, Text: "hello"},
+	if !reflect.DeepEqual(built.Request.Input, want) {
+		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
 	}
 }
 

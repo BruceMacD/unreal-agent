@@ -11,6 +11,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
 const historyPageSize = 256
@@ -25,6 +26,7 @@ type loopState struct {
 
 type toolCallState struct {
 	toolCall   llm.ToolCall
+	status     *tool.CallStatus
 	operations map[operation.ID]struct{}
 }
 
@@ -168,11 +170,14 @@ func (current *coordinator) addItemToLocalState(
 		}
 
 	case sessionstore.ItemTurn:
+		turn, ok := item.Data.(session.Turn)
+		if !ok {
 			return sessionstore.Item{}, fmt.Errorf(
 				"turn data is %T, want session.Turn",
 				item.Data,
 			)
 		}
+		current.state.currentTurnID = turn.ID
 
 	case sessionstore.ItemModelResponse:
 		response, ok := item.Data.(sessionstore.ModelResponse)
@@ -206,6 +211,7 @@ func (current *coordinator) addItemToLocalState(
 		return sessionstore.Item{}, fmt.Errorf("unsupported item kind %q", item.Kind)
 	}
 
+	return item, nil
 }
 
 func (current *coordinator) addToolCallsToLocalState(response sessionstore.ModelResponse) {
@@ -234,9 +240,15 @@ func (current *coordinator) addToolCallOperationsToLocalState(
 	if !exists {
 		return
 	}
+	statusValue := status.Status
+	call.status = &statusValue
 	for _, id := range status.Status.WaitingFor {
 		call.operations[id] = struct{}{}
 	}
+	current.state.toolCalls[toolCallKey{
+		turnID: status.TurnID,
+		callID: status.CallID,
+	}] = call
 }
 
 	turnID session.TurnID,
@@ -306,6 +318,8 @@ func (current *coordinator) addOperationToLocalState(
 	return current.state.operations[value.ID]
 }
 
+	for key, call := range current.state.toolCalls {
+		if call.status != nil {
 			continue
 		}
 		}
@@ -340,7 +354,11 @@ func (current *toolCallContext) Submit(spec operation.Spec) operation.ID {
 		if !current.toolCallOperationsAreTerminal(key.turnID, key.callID) {
 			continue
 		}
+		call := current.state.toolCalls[key]
+		if call.status == nil {
 		}
+		operations := make([]operation.Operation, 0, len(call.status.WaitingFor))
+		for _, id := range call.status.WaitingFor {
 			operations = append(operations, current.state.operations[id])
 		}
 		item, err := current.addItemToLocalState(sessionstore.Item{
