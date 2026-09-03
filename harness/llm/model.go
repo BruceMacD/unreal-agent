@@ -66,7 +66,16 @@ type Tool struct {
 type Model struct {
 	ID              string
 	MaxOutputTokens *int64
+	ReasoningEffort ReasoningEffort
 }
+
+type ReasoningEffort string
+
+const (
+	ReasoningEffortLow    ReasoningEffort = "low"
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	ReasoningEffortHigh   ReasoningEffort = "high"
+)
 
 type Request struct {
 	Model Model

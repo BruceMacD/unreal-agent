@@ -759,6 +759,54 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunSlurpsQueuedInputsBeforeCallingModel(t *testing.T) {
+	store := emptyFakeStore()
+	first := externalEvent(t, 1, "input-1", "first")
+	second := externalEvent(t, 2, "input-2", "second")
+	started := make(chan llm.Request, 1)
+	adapter := &fakeAdapter{respond: func(
+		ctx context.Context,
+		request llm.Request,
+	) (llm.Response, error) {
+		started <- request
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		newFakeOperationManager(),
+		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}),
+		adapter,
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- current.Run(ctx)
+	}()
+
+	request := receiveTestValue(t, started)
+	want := withPreamble(t,
+		llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "first"}},
+		llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "second"}},
+	)
+	if !reflect.DeepEqual(request.Input, want) {
+		t.Fatalf("model input = %#v, want %#v", request.Input, want)
+	}
+	if !reflect.DeepEqual(store.appendedInputs, []inbox.Input{first, second}) {
+		t.Fatalf("appended inputs = %#v", store.appendedInputs)
+	}
+	if got := len(adapter.requestSnapshot()); got != 1 {
+		t.Fatalf("model requests = %d, want 1", got)
+	}
+
+	cancel()
+	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context cancellation", err)
+	}
+}
+
 func TestCoordinatorRunDoesNotCallModelWhenRequestBuildFails(t *testing.T) {
 	store := emptyFakeStore()
 	adapter := &fakeAdapter{}

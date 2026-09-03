@@ -133,6 +133,34 @@ func TestRequestBodyOmitsUnsetMaxOutputTokens(t *testing.T) {
 	}
 }
 
+func TestRequestBodyEncodesReasoningEffort(t *testing.T) {
+	body, err := requestBody(llm.Request{
+		Model: llm.Model{ID: "gpt-test", ReasoningEffort: llm.ReasoningEffortHigh},
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Reasoning struct {
+			Effort  string `json:"effort"`
+			Summary string `json:"summary"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Reasoning.Effort != "high" || request.Reasoning.Summary != "auto" {
+		t.Fatalf("reasoning = %#v", request.Reasoning)
+	}
+}
+
+func TestRequestBodyRejectsUnsupportedReasoningEffort(t *testing.T) {
+	_, err := requestBody(llm.Request{
+		Model: llm.Model{ID: "gpt-test", ReasoningEffort: "maximum"},
+	if err == nil || err.Error() != `unsupported reasoning effort "maximum"` {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRequestBodyEncodesHostedWebSearch(t *testing.T) {
 	body, err := requestBody(llm.Request{
 		Model: llm.Model{ID: "gpt-test"},

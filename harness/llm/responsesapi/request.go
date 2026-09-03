@@ -34,6 +34,16 @@ import (
 		maxOutputTokens := int(*request.Model.MaxOutputTokens)
 		params.MaxOutputTokens = &maxOutputTokens
 	}
+	if request.Model.ReasoningEffort != "" {
+			return nil, fmt.Errorf("unsupported reasoning effort %q", request.Model.ReasoningEffort)
+		}
+		effort := openaiapi.ReasoningEffort(request.Model.ReasoningEffort)
+		summary := openaiapi.ReasoningSummaryAuto
+		params.Reasoning = &openaiapi.Reasoning{
+			Effort:  &effort,
+			Summary: &summary,
+		}
+	}
 	if len(tools) != 0 {
 		params.Tools = &tools
 	}

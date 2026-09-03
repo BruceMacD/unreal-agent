@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -15,6 +16,7 @@ import (
 )
 
 const historyPageSize = 256
+
 
 type coordinator struct {
 	dependencies Dependencies
@@ -146,6 +148,31 @@ func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.In
 	})
 	if err != nil {
 		return err
+	}
+}
+
+func (current *coordinator) handleInboxInputs(ctx context.Context, inputs []inbox.Input) error {
+	for _, input := range inputs {
+		if err := current.handleInboxInput(ctx, input); err != nil {
+			return err
+		}
+		if input.Kind == inbox.InputExternal {
+		}
+	}
+}
+
+	ctx context.Context,
+	defer idle.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		case input, open := <-output:
+			if !open {
+			}
+			inputs = append(inputs, input)
+		case <-idle.C:
+			return inputs, nil
+		}
 	}
 }
 
