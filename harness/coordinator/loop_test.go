@@ -162,6 +162,118 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
+	initial := operation.Operation{
+		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
+	}
+	completed := initial
+	completed.Status = operation.StatusCompleted
+	status := sessionstore.ToolCallStatus{
+		TurnID: "turn-1",
+		CallID: call.CallID,
+		Status: tool.CallStatus{WaitingFor: []operation.ID{initial.ID}},
+	}
+	initialStatus := status
+	initialStatus.Operations = []operation.Operation{initial}
+	completedStatus := status
+	completedStatus.Operations = []operation.Operation{completed}
+	store := &fakeStore{
+		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{
+			Session: session.Session{ID: "session-1"},
+		}},
+		items: []sessionstore.Item{
+			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
+				TurnID:   "turn-1",
+				Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},
+			}),
+			storedItem(3, sessionstore.ItemToolCallStatus, initialStatus),
+			storedItem(4, sessionstore.ItemToolCallStatus, completedStatus),
+		},
+	}
+	builder := contextbuilder.NewBuilder()
+	current := newTestCoordinator(
+		store,
+		newFakeOperationManager(),
+		builder,
+		registry,
+	)
+
+	if err := current.restore(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := current.state.toolCalls[toolCallKey{turnID: "turn-1", callID: call.CallID}]; exists {
+		t.Fatal("completed tool call remains in local state")
+	}
+	if !reflect.DeepEqual(current.state.operations[completed.ID], completed) {
+		t.Fatalf("restored operation = %#v, want %#v", current.state.operations[completed.ID], completed)
+	}
+	built, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(built.Request.Input, want) {
+		t.Fatalf("replayed input = %#v, want %#v", built.Request.Input, want)
+	}
+}
+
+func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T) {
+	first := operation.Operation{
+		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
+	}
+	second := operation.Operation{
+		ID: "operation-2", Type: "test", Version: 1, Status: operation.StatusReady,
+	}
+	resumedSecond := second
+	resumedSecond.Status = operation.StatusAwaiting
+	status := sessionstore.ToolCallStatus{
+		TurnID:     "turn-1",
+		CallID:     call.CallID,
+		Status:     tool.CallStatus{WaitingFor: []operation.ID{first.ID, second.ID}},
+		Operations: []operation.Operation{first, second},
+	}
+	store := &fakeStore{
+		resume: sessionstore.ResumeState{
+			Snapshot:   sessionstore.Snapshot{Session: session.Session{ID: "session-1"}},
+		},
+		items: []sessionstore.Item{
+			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
+				TurnID:   "turn-1",
+				Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},
+			}),
+			storedItem(3, sessionstore.ItemToolCallStatus, status),
+		},
+	}
+	operations := newFakeOperationManager()
+	current := newTestCoordinator(
+		store,
+		operations,
+		contextbuilder.NewBuilder(),
+		registry,
+	)
+
+	if err := current.restore(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(current.state.operations[first.ID], first) ||
+		!reflect.DeepEqual(current.state.operations[second.ID], resumedSecond) {
+		t.Fatalf("restored operations = %#v", current.state.operations)
+	}
+	if err := current.dispatchOperationsToManager(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[operation.ID]operation.Operation{
+		first.ID:  first,
+		second.ID: resumedSecond,
+	}
+	got := make(map[operation.ID]operation.Operation, len(operations.adds))
+	for _, value := range operations.adds {
+		got[value.ID] = value
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dispatched operations = %#v, want %#v", got, want)
+	}
+}
+
 func TestCoordinatorTracksToolCalls(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
@@ -505,6 +617,17 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{first, second}) {
 		t.Fatalf("saved operations = %#v, want %#v", store.savedOperations, []operation.Operation{first, second})
 	}
+	if !reflect.DeepEqual(store.appendedStatuses, []sessionstore.ToolCallStatus{{
+		TurnID: status.TurnID,
+		CallID: status.CallID,
+		Status: status.Status,
+		Operations: []operation.Operation{
+			first,
+			second,
+		},
+	}}) {
+		t.Fatalf("appended statuses = %#v", store.appendedStatuses)
+	}
 	built, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -748,6 +871,10 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 	}
 	current.addOperationToLocalState(value)
 	status := sessionstore.ToolCallStatus{
+		TurnID:     turn.ID,
+		CallID:     "call-1",
+		Status:     tool.CallStatus{WaitingFor: []operation.ID{value.ID}},
+		Operations: []operation.Operation{value},
 	}
 	items := []sessionstore.Item{
 		{Kind: sessionstore.ItemInput, Data: event},
@@ -763,6 +890,7 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 
 		!reflect.DeepEqual(store.appendedTurns, []session.Turn{turn}) ||
 		!reflect.DeepEqual(store.appendedResponses, []sessionstore.ModelResponse{response}) ||
+		!reflect.DeepEqual(store.appendedStatuses, []sessionstore.ToolCallStatus{status}) {
 		t.Fatalf("stored items: inputs=%#v turns=%#v responses=%#v statuses=%#v",
 			store.appendedInputs,
 			store.appendedTurns,
@@ -839,6 +967,23 @@ func (testTranslator) TranslateResult(
 ) (llm.ToolResult, error) {
 }
 
+type operationStatusTranslator struct{}
+
+func (operationStatusTranslator) Translate(tool.Context, llm.ToolCall) tool.CallStatus {
+	return tool.CallStatus{}
+}
+
+func (operationStatusTranslator) TranslateResult(
+	_ string,
+	_ tool.CallStatus,
+	operations []operation.Operation,
+) (llm.ToolResult, error) {
+	statuses := make([]string, 0, len(operations))
+	for _, value := range operations {
+		statuses = append(statuses, string(value.Status))
+	}
+}
+
 type itemRequest struct {
 	After sessionstore.Sequence
 	Limit int
@@ -895,6 +1040,7 @@ func (store *fakeStore) AppendToolCallStatus(
 	_ session.ID,
 	status sessionstore.ToolCallStatus,
 ) error {
+	store.appendedStatuses = append(store.appendedStatuses, status)
 }
 
 func (store *fakeStore) SaveOperation(

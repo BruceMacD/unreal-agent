@@ -67,6 +67,14 @@ func encodeInitialLog(value session.Session, items []sessionstore.Item) ([]byte,
 			return nil, fmt.Errorf("item %d recorded time is zero", index)
 		}
 
+		record := itemRecord{Item: item}
+		if item.Kind == sessionstore.ItemToolCallStatus {
+			status := item.Data.(sessionstore.ToolCallStatus)
+			record.Operations = status.Operations
+			status.Operations = nil
+			record.Item.Data = status
+		}
+		line, err := encodeRecord(recordItem, record)
 		if err != nil {
 			return nil, fmt.Errorf("encode item %d: %w", index, err)
 		}

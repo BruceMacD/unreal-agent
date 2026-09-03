@@ -82,6 +82,13 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 		State:       jsontext.Value(`{"step":1}`),
 		Idempotency: jsontext.Value(`{"key":"one"}`),
 	}
+	status := sessionstore.ToolCallStatus{
+		TurnID:     turn.ID,
+		CallID:     "call-1",
+		Status:     tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+		Operations: []operation.Operation{initialOperation},
+	}
+	if err := store.AppendToolCallStatus(t.Context(), snapshot.Session.ID, status); err != nil {
 		t.Fatalf("append tool-call status: %v", err)
 	}
 
@@ -171,6 +178,8 @@ func TestStoreAppendsJSONLRecords(t *testing.T) {
 		"session-1",
 		sessionstore.ToolCallStatus{
 			TurnID: "turn-1", CallID: "call-1",
+			Status:     tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+			Operations: []operation.Operation{initial},
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -230,6 +239,13 @@ func TestStorePersistsRepeatedToolCallStatuses(t *testing.T) {
 	initial := operation.Operation{
 		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
 	}
+	status := sessionstore.ToolCallStatus{
+		TurnID:     "turn-1",
+		CallID:     "call-1",
+		Status:     tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+		Operations: []operation.Operation{initial},
+	}
+	if err := store.AppendToolCallStatus(t.Context(), "session-1", status); err != nil {
 		t.Fatal(err)
 	}
 	completed := initial
@@ -237,6 +253,8 @@ func TestStorePersistsRepeatedToolCallStatuses(t *testing.T) {
 	if err := store.SaveOperation(t.Context(), "session-1", completed); err != nil {
 		t.Fatal(err)
 	}
+	status.Operations = []operation.Operation{completed}
+	if err := store.AppendToolCallStatus(t.Context(), "session-1", status); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,6 +264,16 @@ func TestStorePersistsRepeatedToolCallStatuses(t *testing.T) {
 		sessionstore.ItemToolCallStatus,
 		sessionstore.ItemToolCallStatus,
 	)
+	page, err := reopened.Items(t.Context(), "session-1", sessionstore.BeforeFirst, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := page.Items[1].Data.(sessionstore.ToolCallStatus)
+	last := page.Items[2].Data.(sessionstore.ToolCallStatus)
+	if !reflect.DeepEqual(first.Operations, []operation.Operation{initial}) ||
+		!reflect.DeepEqual(last.Operations, []operation.Operation{completed}) {
+		t.Fatalf("status snapshots = %#v, %#v", first.Operations, last.Operations)
+	}
 	resume, err := reopened.Resume(t.Context(), "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +299,8 @@ func TestReopenedStoreContinuesFromDerivedWriteState(t *testing.T) {
 		"session-1",
 		sessionstore.ToolCallStatus{
 			TurnID: "turn-1", CallID: "call-1",
+			Status:     tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+			Operations: []operation.Operation{initial},
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -450,6 +480,9 @@ func TestCreateReplacesPopulatedSession(t *testing.T) {
 			TurnID: "old-turn",
 			CallID: "old-call",
 			Status: tool.CallStatus{WaitingFor: []operation.ID{"old-operation"}},
+			Operations: []operation.Operation{{
+				ID: "old-operation", Type: "test", Version: 1, Status: operation.StatusAwaiting,
+			}},
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -525,7 +558,9 @@ func TestFailedReplacementEvictsCachedWriteState(t *testing.T) {
 		Status: tool.CallStatus{WaitingFor: []operation.ID{
 			"ready", "awaiting", "canceling", "complete", "failed", "canceled",
 		}},
+		Operations: operations,
 	}
+	if err := store.AppendToolCallStatus(t.Context(), "session-1", status); err != nil {
 		t.Fatalf("append operations: %v", err)
 	}
 
@@ -570,6 +605,11 @@ func TestForkCopiesHistoryThroughTurnWithoutOperations(t *testing.T) {
 		ID: "parent-operation", Type: "test", Version: 1, Status: operation.StatusAwaiting,
 	}
 	if err := store.AppendToolCallStatus(t.Context(), "parent", sessionstore.ToolCallStatus{
+		TurnID:     "turn-1",
+		CallID:     "call-1",
+		Status:     tool.CallStatus{WaitingFor: []operation.ID{"parent-operation"}},
+		Operations: []operation.Operation{parentOperation},
+	}); err != nil {
 		t.Fatalf("append parent status: %v", err)
 	}
 	}); err != nil {
@@ -648,6 +688,9 @@ func TestForkPersistsDelayedStatusBoundaries(t *testing.T) {
 			TurnID: "turn-1",
 			CallID: "call-1",
 			Status: tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+			Operations: []operation.Operation{{
+				ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
+			}},
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -728,6 +771,8 @@ func TestMutationsUseTheSuppliedSessionID(t *testing.T) {
 		"session-2",
 		sessionstore.ToolCallStatus{
 			TurnID: "turn-2", CallID: "call-2",
+			Status:     tool.CallStatus{WaitingFor: []operation.ID{"operation-2"}},
+			Operations: []operation.Operation{operationValue},
 		},
 	); err != nil {
 		t.Fatalf("append operation to owning session: %v", err)
@@ -828,6 +873,10 @@ func TestRejectedToolCallStatusesDoNotChangePersistedState(t *testing.T) {
 				t.Context(),
 				"session-1",
 				sessionstore.ToolCallStatus{
+					TurnID:     "turn-1",
+					CallID:     "call-1",
+					Status:     test.status,
+					Operations: test.operations,
 				},
 			)
 			if err == nil {
@@ -1102,6 +1151,9 @@ func TestForkReportsParentTurnFailuresAndReplacesDestination(t *testing.T) {
 				TurnID: "old-child-turn",
 				CallID: "old-child-call",
 				Status: tool.CallStatus{WaitingFor: []operation.ID{"old-child-operation"}},
+				Operations: []operation.Operation{{
+					ID: "old-child-operation", Type: "test", Version: 1, Status: operation.StatusAwaiting,
+				}},
 			},
 		); err != nil {
 			t.Fatal(err)

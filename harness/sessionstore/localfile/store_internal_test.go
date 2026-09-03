@@ -82,6 +82,11 @@ func TestStoreLoadsGoldenLog(t *testing.T) {
 			Data: sessionstore.ToolCallStatus{
 				TurnID: "turn-1", CallID: "call-1",
 				Status: tool.CallStatus{WaitingFor: []operation.ID{"operation-1"}},
+				Operations: []operation.Operation{{
+					ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
+					State:       jsontext.Value(`{"step":1}`),
+					Idempotency: jsontext.Value(`{"key":"one"}`),
+				}},
 			},
 		},
 	}

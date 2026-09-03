@@ -10,6 +10,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
@@ -28,6 +29,8 @@ func TestItemJSONRoundTrip(t *testing.T) {
 			}}},
 		}},
 		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemToolCallStatus, Data: ToolCallStatus{
+			Operations: []operation.Operation{{
+			}},
 		}},
 	}
 

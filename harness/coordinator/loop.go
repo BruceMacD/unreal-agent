@@ -87,6 +87,12 @@ func (current *coordinator) handleOperationUpdate(
 }
 
 func (current *coordinator) restore(ctx context.Context) error {
+	if err := current.loadHistory(ctx); err != nil {
+		return err
+	}
+		current.addOperationToLocalState(value)
+	}
+	return nil
 }
 
 func (current *coordinator) loadHistory(ctx context.Context) error {
@@ -166,6 +172,9 @@ func (current *coordinator) addItemToLocalState(
 				"tool-call status data is %T, want sessionstore.ToolCallStatus",
 				item.Data,
 			)
+		}
+		for _, value := range status.Operations {
+			current.addOperationToLocalState(value)
 		}
 		current.addToolCallOperationsToLocalState(status)
 		if err := current.addToolResultToLocalState(status); err != nil {

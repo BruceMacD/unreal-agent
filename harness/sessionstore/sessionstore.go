@@ -46,6 +46,10 @@ type ModelResponse struct {
 }
 
 type ToolCallStatus struct {
+	TurnID     session.TurnID
+	CallID     string
+	Status     tool.CallStatus
+	Operations []operation.Operation `json:",omitempty"`
 }
 
 type Snapshot struct {
@@ -67,6 +71,9 @@ type Store interface {
 	Items(context.Context, session.ID, Sequence, int) (Page, error)
 	AppendTurn(context.Context, session.ID, session.Turn) error
 	AppendModelResponse(context.Context, session.ID, ModelResponse) error
+	// AppendToolCallStatus appends the status and its operation snapshots.
+	// The first append also initializes those operations.
+	AppendToolCallStatus(context.Context, session.ID, ToolCallStatus) error
 	// SaveOperation stores a complete state; the latest state for its ID wins.
 	SaveOperation(context.Context, session.ID, operation.Operation) error
 	Resume(context.Context, session.ID) (ResumeState, error)

@@ -148,6 +148,8 @@ func (store *Store) AppendToolCallStatus(
 	if err != nil {
 		return err
 	}
+	operations := status.Operations
+	status.Operations = nil
 	item, err := head.appendToolCallStatus(status, operations, time.Now().UTC())
 	if err != nil {
 		return err
