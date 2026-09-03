@@ -1332,7 +1332,9 @@ type fakeAdapter struct {
 }
 
 func (adapter *fakeAdapter) Respond(
+	request llm.Request,
 ) (llm.Response, error) {
+	adapter.requests = append(adapter.requests, request)
 	return llm.Response{}, errors.New("unexpected respond")
 }
 

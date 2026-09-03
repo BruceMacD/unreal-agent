@@ -70,6 +70,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 				return closedInputError(ctx, "operation updates")
 			}
 			}
+
 		}
 
 			return err
