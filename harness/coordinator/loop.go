@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
@@ -32,6 +33,10 @@ type toolCallKey struct {
 	callID string
 }
 
+type toolCallContext struct {
+	operations []operation.Operation
+}
+
 var _ Coordinator = (*coordinator)(nil)
 
 func newLoopState() loopState {
@@ -45,6 +50,8 @@ func (current *coordinator) Run(ctx context.Context) error {
 	}
 
 	operationUpdates := current.dependencies.Operations.Updates()
+		return err
+	}
 	if err := current.dispatchOperationsToManager(); err != nil {
 		return err
 	}
@@ -287,6 +294,47 @@ func (current *coordinator) addOperationToLocalState(
 
 			continue
 		}
+		}
+	}
+}
+
+func (current *coordinator) scheduleToolCall(
+	ctx context.Context,
+	key toolCallKey,
+	call llm.ToolCall,
+	translator, exists := current.dependencies.Tools.Resolve(call.Name)
+	toolContext := &toolCallContext{}
+	operations := make([]operation.Operation, 0, len(toolContext.operations))
+	for _, value := range toolContext.operations {
+		operations = append(operations, current.addOperationToLocalState(value))
+	}
+	item, err := current.addItemToLocalState(sessionstore.Item{
+		Kind: sessionstore.ItemToolCallStatus,
+	})
+	if err != nil {
+	}
+}
+
+func (current *toolCallContext) Submit(spec operation.Spec) operation.ID {
+	id := operation.ID(uuid.New().String())
+	current.operations = append(current.operations, operation.Operation{
+	})
+	return id
+}
+
+	for key := range current.state.toolCalls {
+		if !current.toolCallOperationsAreTerminal(key.turnID, key.callID) {
+			continue
+		}
+		}
+			operations = append(operations, current.state.operations[id])
+		}
+		item, err := current.addItemToLocalState(sessionstore.Item{
+			Kind: sessionstore.ItemToolCallStatus,
+		})
+		if err != nil {
+		}
+		if err := current.storeItemInSessionStore(ctx, item); err != nil {
 		}
 	}
 }

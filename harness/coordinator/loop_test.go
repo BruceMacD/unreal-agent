@@ -514,6 +514,91 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.T) {
+	firstSpec, err := operation.NewValueSpec(jsontext.Value(`{"value":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSpec, err := operation.NewValueSpec(jsontext.Value(`{"value":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	translator := &submittingTranslator{specs: []operation.Spec{firstSpec, secondSpec}}
+	handled := llm.ToolCall{CallID: "call-handled", Name: tool.BashName, Arguments: `{}`}
+	missing := llm.ToolCall{CallID: "call-missing", Name: tool.BashName, Arguments: `{}`}
+	store := &fakeStore{
+		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{
+			Session: session.Session{ID: "session-1"},
+		}},
+		items: []sessionstore.Item{
+			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
+				TurnID: "turn-1",
+				Response: llm.Response{Output: []llm.Item{
+					{Type: llm.ItemToolCall, Data: handled},
+					{Type: llm.ItemToolCall, Data: missing},
+				}},
+			}),
+			storedItem(3, sessionstore.ItemToolCallStatus, sessionstore.ToolCallStatus{
+				TurnID: "turn-1",
+				CallID: handled.CallID,
+				Status: tool.CallStatus{Error: "already handled"},
+			}),
+		},
+	}
+	operations := newFakeOperationManager()
+	operations.addError = func(operation.Operation) error {
+		if len(store.appendedStatuses) != 1 || store.appendedStatuses[0].CallID != missing.CallID {
+			return errors.New("operation dispatched before tool-call status was stored")
+		}
+		return nil
+	}
+	current := newTestCoordinatorWithAdapter(
+		store,
+		inputs,
+		operations,
+		contextbuilder.NewBuilder(),
+		registry,
+		adapter,
+	)
+
+	err = current.Run(t.Context())
+		t.Fatalf("Run error = %v, want closed inbox error", err)
+	}
+	if !reflect.DeepEqual(translator.calls, []llm.ToolCall{missing}) {
+		t.Fatalf("translated calls = %#v, want %#v", translator.calls, []llm.ToolCall{missing})
+	}
+	if len(store.appendedStatuses) != 1 {
+		t.Fatalf("appended statuses = %#v", store.appendedStatuses)
+	}
+	status := store.appendedStatuses[0]
+	if status.TurnID != "turn-1" || status.CallID != missing.CallID ||
+		len(status.Status.WaitingFor) != 2 || len(status.Operations) != 2 {
+		t.Fatalf("appended status = %#v", status)
+	}
+	wantOperations := make(map[operation.ID]operation.Operation, len(status.Operations))
+	for index, value := range status.Operations {
+		if value.ID == "" || value.ID != status.Status.WaitingFor[index] ||
+			t.Fatalf("scheduled operation %d = %#v", index, value)
+		}
+		wantOperations[value.ID] = value
+		if !reflect.DeepEqual(current.state.operations[value.ID], value) {
+			t.Fatalf("local operation %q = %#v, want %#v", value.ID, current.state.operations[value.ID], value)
+		}
+	}
+	gotOperations := make(map[operation.ID]operation.Operation, len(operations.adds))
+	for _, value := range operations.adds {
+		gotOperations[value.ID] = value
+	}
+	if !reflect.DeepEqual(gotOperations, wantOperations) {
+		t.Fatalf("dispatched operations = %#v, want %#v", gotOperations, wantOperations)
+	}
+		t.Fatal(err)
+	}
+	if len(translator.calls) != 1 || len(store.appendedStatuses) != 1 {
+		t.Fatalf("rescheduled call: calls=%#v statuses=%#v", translator.calls, store.appendedStatuses)
+	}
+}
+
 	store := emptyFakeStore()
 	initial := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
@@ -962,6 +1047,28 @@ func (testTranslator) Translate(tool.Context, llm.ToolCall) tool.CallStatus {
 
 func (testTranslator) TranslateResult(
 	_ string,
+	status tool.CallStatus,
+	_ []operation.Operation,
+) (llm.ToolResult, error) {
+}
+
+type submittingTranslator struct {
+}
+
+func (translator *submittingTranslator) Translate(
+	ctx tool.Context,
+	call llm.ToolCall,
+) tool.CallStatus {
+	translator.calls = append(translator.calls, call)
+	status := tool.CallStatus{WaitingFor: make([]operation.ID, 0, len(translator.specs))}
+	for _, spec := range translator.specs {
+		status.WaitingFor = append(status.WaitingFor, ctx.Submit(spec))
+	}
+	return status
+}
+
+func (*submittingTranslator) TranslateResult(
+	callID string,
 	status tool.CallStatus,
 	_ []operation.Operation,
 ) (llm.ToolResult, error) {
