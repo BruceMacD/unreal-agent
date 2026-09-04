@@ -1,8 +1,12 @@
 package tool
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"uuid"
@@ -47,6 +51,7 @@ func (current *registry) Resolve(name string) (Translator, bool) {
 }
 
 func (current *registry) RegisterSkill(skill Skill) (RegistrationID, error) {
+	}
 	current.mu.Lock()
 	defer current.mu.Unlock()
 	if _, exists := current.skillIDsByPath[skill.Path]; exists {
@@ -82,6 +87,63 @@ func (current *registry) Skills() []Skill {
 		result = append(result, current.skills[id])
 	}
 	return result
+}
+
+	paths, err := filepath.Glob(filepath.Join(directory, "*", "SKILL.md"))
+	if err != nil {
+	}
+
+	var skillErrors []error
+	for _, path := range paths {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			skillErrors = append(skillErrors, fmt.Errorf("read skill %q: %w", path, err))
+			continue
+		}
+		frontmatter, err := parseSkillFrontmatter(contents)
+		if err != nil {
+			skillErrors = append(skillErrors, fmt.Errorf("parse skill %q: %w", path, err))
+			continue
+		}
+			Name:        strings.TrimSpace(frontmatter.Name),
+			Description: strings.TrimSpace(frontmatter.Description),
+			Path:        path,
+		}
+	}
+}
+
+type skillFrontmatter struct {
+	Name        string
+	Description string
+}
+
+func parseSkillFrontmatter(contents []byte) (skillFrontmatter, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(contents))
+	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "---" {
+		return skillFrontmatter{}, errors.New("missing opening YAML frontmatter delimiter")
+	}
+
+	var metadata skillFrontmatter
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "---" {
+			return metadata, nil
+		}
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		switch key {
+		case "name":
+			metadata.Name = strings.TrimSpace(value)
+		case "description":
+			metadata.Description = strings.TrimSpace(value)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return skillFrontmatter{}, fmt.Errorf("read YAML frontmatter: %w", err)
+	}
+	return skillFrontmatter{}, errors.New("missing closing YAML frontmatter delimiter")
 }
 
 func removeRegistrationID(ids []RegistrationID, target RegistrationID) []RegistrationID {

@@ -91,6 +91,8 @@ func TestRegistryStaticDefinitionsReturnsIndependentValues(t *testing.T) {
 
 func TestRegistryRegistersListsAndUnregistersSkills(t *testing.T) {
 	registry := NewRegistry(StaticTranslators{})
+	first := Skill{Name: "go-review", Description: "Review Go code", Path: "/skills/go/SKILL.md"}
+	second := Skill{Name: "documents", Description: "Edit documents", Path: "/skills/docs/SKILL.md"}
 	firstID, err := registry.RegisterSkill(first)
 	if err != nil {
 		t.Fatal(err)
@@ -125,8 +127,19 @@ func TestRegistryRejectsInvalidAndDuplicateSkills(t *testing.T) {
 	if _, err := registry.RegisterSkill(Skill{}); err == nil || err.Error() != "skill path must be set" {
 		t.Fatalf("missing path error = %v", err)
 	}
+	if _, err := registry.RegisterSkill(Skill{Path: "/skill"}); err == nil ||
+		err.Error() != "skill name must be set" {
+		t.Fatalf("missing name error = %v", err)
+	}
+	if _, err := registry.RegisterSkill(Skill{Name: "review", Path: "/skill"}); err == nil ||
+		err.Error() != "skill description must be set" {
+		t.Fatalf("missing description error = %v", err)
+	}
+	skill := Skill{Name: "review", Description: "Review code", Path: "/skill"}
+	if _, err := registry.RegisterSkill(skill); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := registry.RegisterSkill(skill); err == nil ||
 		err.Error() != `skill path "/skill" is already registered` {
 		t.Fatalf("duplicate path error = %v", err)
 	}

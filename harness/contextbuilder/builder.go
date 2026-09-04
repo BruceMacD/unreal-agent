@@ -8,6 +8,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
 
@@ -21,6 +22,11 @@ type builder struct {
 
 var _ Builder = (*builder)(nil)
 
+func NewBuilder(skills ...tool.Skill) Builder {
+	currentPreamble := preamble
+	if skillPrompt := formatSkillsForPrompt(skills); skillPrompt != "" {
+		currentPreamble += "\n\n" + skillPrompt
+	}
 }
 
 func (current *builder) AddExternalInput(input inbox.Input) error {

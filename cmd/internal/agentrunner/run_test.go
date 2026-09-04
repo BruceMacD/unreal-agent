@@ -38,6 +38,17 @@ func TestRunMainExecutesBatchedMessages(t *testing.T) {
 		},
 	}
 	workspace := t.TempDir()
+	skillPath := filepath.Join(workspace, ".harness", "skills", "review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`---
+name: review
+description: Review code.
+---
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	sessions := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	code := RunMain(
@@ -88,6 +99,8 @@ func TestRunMainExecutesBatchedMessages(t *testing.T) {
 		}
 	}
 	if len(messages) != 3 || messages[0].Role != llm.RoleSystem ||
+		!strings.Contains(messages[0].Text, "<name>review</name>") ||
+		!strings.Contains(messages[0].Text, "<location>"+skillPath+"</location>") ||
 		!strings.HasSuffix(messages[0].Text, "\n\nbe concise") ||
 		!slices.Equal(messages[1:], wantMessages) {
 		t.Fatalf("messages = %#v, want system preamble plus %#v", messages, wantMessages)

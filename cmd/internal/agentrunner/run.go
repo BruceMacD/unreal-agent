@@ -215,6 +215,10 @@ func Run(
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+		if _, err := fmt.Fprintf(flagOutput, "skill error> %s\n", skillErr); err != nil {
+			return fmt.Errorf("write skill error: %w", err)
+		}
+	}
 
 	inputs, err := inbox.New(runContext, restored.ExternalInputIDs)
 	if err != nil {
@@ -238,6 +242,7 @@ func Run(
 		}
 	}
 
+	builder := contextbuilder.NewBuilder(registry.Skills()...)
 	builder.SetModel(llm.Model{
 		ID:              model,
 		ReasoningEffort: reasoningEffort(parsed.ThinkingLevel),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
 // withPreamble expects the items after the preamble every builder starts with.
@@ -212,5 +213,40 @@ func TestBuilderLeadsSystemPromptWithPreamble(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result.Request.Input, want) {
 		t.Fatalf("input = %#v, want %#v", result.Request.Input, want)
+	}
+}
+
+func TestBuilderAppendsSkillsToPreamble(t *testing.T) {
+	skills := []tool.Skill{
+		{
+			Name:        "go-review",
+			Description: `Review <Go> & "tests"`,
+			Path:        "/skills/reviewer's/SKILL.md",
+		},
+		{
+			Name:        "documents",
+			Description: "Edit documents",
+			Path:        "/skills/documents/SKILL.md",
+		},
+	}
+	current := NewBuilder(skills...)
+	skills[0].Name = "changed"
+	current.SetSystemPrompt("Be concise.")
+
+	result, err := current.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := preamble + `
+
+The following skills provide specialized instructions for specific tasks.
+Use SkillUse to load a skill's file when the task matches its description.
+When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool calls.
+
+<available_skills><skill><name>go-review</name><description>Review &lt;Go&gt; &amp; &#34;tests&#34;</description><location>/skills/reviewer&#39;s/SKILL.md</location></skill><skill><name>documents</name><description>Edit documents</description><location>/skills/documents/SKILL.md</location></skill></available_skills>
+
+Be concise.`
+	if got := result.Request.Input[0].Data.(llm.Message).Text; got != want {
+		t.Fatalf("system prompt = %q, want %q", got, want)
 	}
 }

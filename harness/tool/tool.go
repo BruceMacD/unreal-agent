@@ -43,6 +43,7 @@ type Registry interface {
 }
 
 type Skill struct {
+	Name        string
 	Description string
 	Path        string
 }
