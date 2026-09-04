@@ -49,9 +49,12 @@ func staticDefinitions() []Definition {
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"name": map[string]any{
 						"type":        "string",
+						"description": "The exact name of the skill to load.",
 					},
 				},
+				"required": []any{"name"},
 			},
 		}},
 	}

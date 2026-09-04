@@ -37,6 +37,7 @@ type StaticTranslators struct {
 	}
 	current.staticTranslators = map[string]Translator{
 		BashName:      configured.Bash,
+		SkillUseName:  &skillUseTranslator{registry: current},
 	}
 	return current
 }
@@ -56,6 +57,11 @@ func (current *registry) RegisterSkill(skill Skill) (RegistrationID, error) {
 	defer current.mu.Unlock()
 	if _, exists := current.skillIDsByPath[skill.Path]; exists {
 		return uuid.Nil(), fmt.Errorf("skill path %q is already registered", skill.Path)
+	}
+	for _, registered := range current.skills {
+		if registered.Name == skill.Name {
+			return uuid.Nil(), fmt.Errorf("skill name %q is already registered", skill.Name)
+		}
 	}
 	id := uuid.New()
 	current.skills[id] = skill
@@ -87,6 +93,18 @@ func (current *registry) Skills() []Skill {
 		result = append(result, current.skills[id])
 	}
 	return result
+}
+
+func (current *registry) resolveSkill(name string) (Skill, bool) {
+	current.mu.RLock()
+	defer current.mu.RUnlock()
+	for _, id := range current.skillOrder {
+		skill := current.skills[id]
+		if skill.Name == name {
+			return skill, true
+		}
+	}
+	return Skill{}, false
 }
 
 	paths, err := filepath.Glob(filepath.Join(directory, "*", "SKILL.md"))

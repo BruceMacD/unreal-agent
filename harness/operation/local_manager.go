@@ -287,6 +287,8 @@ func advanceLocalOperation(current Operation, event *primitives.PrimitiveEvent) 
 	switch current.Type {
 	case TypeValue:
 		return AdvanceValue(current, event)
+	case TypeSkillUse:
+		return AdvanceSkillUse(current, event)
 	default:
 		return Step{}, fmt.Errorf(
 			"local operation manager does not support type %q: %w",
@@ -298,6 +300,13 @@ func advanceLocalOperation(current Operation, event *primitives.PrimitiveEvent) 
 
 func failLocalOperation(current Operation, err error) Operation {
 	switch current.Type {
+	case TypeSkillUse:
+		state, stateErr := skillUseOperationState(current)
+		if stateErr == nil {
+			step, stepErr := failSkillUse(current, state, err)
+			if stepErr == nil {
+			}
+		}
 	case TypeShell:
 		if stateErr == nil {
 			if stepErr == nil {

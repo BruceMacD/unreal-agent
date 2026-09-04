@@ -51,6 +51,13 @@ func (translator *fixedTranslator) TranslateResult(
 			t.Fatalf("resolve %q = (%#v, %t), want (%#v, true)", name, got, exists, want)
 		}
 	}
+	skillUse, exists := registry.Resolve(SkillUseName)
+	if !exists {
+		t.Fatal("SkillUse is not registered")
+	}
+	if _, owned := skillUse.(*skillUseTranslator); !owned {
+		t.Fatalf("SkillUse translator = %T, want registry-owned translator", skillUse)
+	}
 	if translator, exists := registry.Resolve("unknown"); exists || translator != nil {
 		t.Fatalf("resolve unknown = (%#v, %t), want (nil, false)", translator, exists)
 	}
@@ -73,6 +80,27 @@ func TestRegistryOwnsCanonicalBashDefinition(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Bash definition = %#v, want %#v", got, want)
+	}
+}
+
+func TestRegistryOwnsCanonicalSkillUseDefinition(t *testing.T) {
+	want := llm.Tool{
+		Type:        llm.ToolFunction,
+		Name:        SkillUseName,
+		Description: "Load the instructions for a registered skill.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "The exact name of the skill to load.",
+				},
+			},
+			"required": []any{"name"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SkillUse definition = %#v, want %#v", got, want)
 	}
 }
 
@@ -142,5 +170,10 @@ func TestRegistryRejectsInvalidAndDuplicateSkills(t *testing.T) {
 	if _, err := registry.RegisterSkill(skill); err == nil ||
 		err.Error() != `skill path "/skill" is already registered` {
 		t.Fatalf("duplicate path error = %v", err)
+	}
+	if _, err := registry.RegisterSkill(Skill{
+		Name: "review", Description: "Review other code", Path: "/other-skill",
+	}); err == nil || err.Error() != `skill name "review" is already registered` {
+		t.Fatalf("duplicate name error = %v", err)
 	}
 }
