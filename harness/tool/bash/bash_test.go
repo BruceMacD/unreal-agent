@@ -60,18 +60,53 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 		name   string
 		status operation.Status
 		state  operation.ShellState
+		want   string
 	}{
 		{
 			name:   "completed",
 			status: operation.StatusCompleted,
 			state: operation.ShellState{
 				Result: &operation.ShellResult{
+					OutSize: 3,
 				},
 			},
 		},
 		{
+			name:   "empty output",
+			status: operation.StatusCompleted,
+			state:  operation.ShellState{Result: &operation.ShellResult{}},
+		},
+		{
+			name:   "nonzero exit with stderr",
+			status: operation.StatusCompleted,
+			state: operation.ShellState{Result: &operation.ShellResult{
+			}},
+		},
+		{
+			name:   "truncated stdout",
+			status: operation.StatusCompleted,
+			}},
+		},
+		{
+			name:   "truncated stderr",
+			status: operation.StatusCompleted,
+			}},
+		},
+		{
+			name:   "ready",
+			status: operation.StatusReady,
+		},
+		{
 			name:   "awaiting",
 			status: operation.StatusAwaiting,
+		},
+		{
+			name:   "canceling",
+			status: operation.StatusCanceling,
+		},
+		{
+			name:   "canceled",
+			status: operation.StatusCanceled,
 		},
 		{
 			name:   "failed",
@@ -116,6 +151,7 @@ func TestTranslatorTranslatesValidationErrorWithoutOperations(t *testing.T) {
 	result, err := translator.TranslateResult("call-1", status, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
 	}
 }
 

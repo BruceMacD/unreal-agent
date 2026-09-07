@@ -57,6 +57,8 @@ func translateOperationResult(
 	}
 	}
 	if state.Result != nil {
+		}
+	}
 }
 
 	var arguments map[string]jsontext.Value
