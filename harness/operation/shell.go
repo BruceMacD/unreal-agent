@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
 )
@@ -24,19 +25,26 @@ const (
 	ShellPhaseCreateErr       ShellPhase = "create_err"
 	ShellPhaseProcess         ShellPhase = "process"
 	ShellPhaseReadOut         ShellPhase = "read_out"
+	ShellPhaseReadOutTail     ShellPhase = "read_out_tail"
 	ShellPhaseReadErr         ShellPhase = "read_err"
+	ShellPhaseReadErrTail     ShellPhase = "read_err_tail"
 )
 
 type ShellInput struct {
 }
 
 type ShellResult struct {
+	Out      string
+	Err      string
 	OutSize  int64
 	ErrSize  int64
 	ExitCode int
 }
 
 type ShellState struct {
+	Input         ShellInput
+	BaseDirectory string
+
 	Phase           ShellPhase
 	ProcessGroupID  int
 	PendingExitCode *int
@@ -44,8 +52,15 @@ type ShellState struct {
 	ErrSize         int64
 	InlineOut       []byte
 	InlineErr       []byte
+	InlineOutTail   []byte
+	InlineErrTail   []byte
 	Result          *ShellResult
 	TerminalError   string
+	ErrorTruncated  bool
+	OutTruncated    bool
+	ErrTruncated    bool
+	OutPath         string
+	ErrPath         string
 }
 
 type Shell struct {
@@ -67,8 +82,16 @@ func NewShell(current Operation) (*Shell, error) {
 func NewShellSpec(
 	input ShellInput,
 	baseDirectory string,
+	maxOutputLength int,
 ) (Spec, error) {
+	if maxOutputLength <= 0 || maxOutputLength > MaxOutputLength {
+		return Spec{}, errors.New("max output length is out of range")
+	}
 	state := ShellState{
+		Input:         input,
+		BaseDirectory: baseDirectory,
+		OutTruncated:  true,
+		ErrTruncated:  true,
 	}
 	if err := validateShellState(state); err != nil {
 		return Spec{}, err
@@ -79,6 +102,10 @@ func NewShellSpec(
 		return Spec{}, fmt.Errorf("encode shell operation state: %w", err)
 	}
 	return Spec{
+		MaxOutputLength: maxOutputLength,
+		Type:            TypeShell,
+		Version:         VersionShell,
+		State:           encoded,
 	}, nil
 }
 
@@ -116,6 +143,20 @@ func (shell *Shell) Handle(event *primitives.PrimitiveEvent) (Step, error) {
 }
 
 func shellOperationState(current Operation) (ShellState, error) {
+	state, err := DecodeShellState(current)
+	if err != nil {
+		return ShellState{}, err
+	}
+	if err := validateShellState(state); err != nil {
+		return ShellState{}, fmt.Errorf("validate shell operation %q state: %w", current.ID, err)
+	}
+	if int64(len(state.InlineOut)+len(state.InlineOutTail)) > current.shellReadLimit() || int64(len(state.InlineErr)+len(state.InlineErrTail)) > current.shellReadLimit() {
+		return ShellState{}, errors.New("inline shell result exceeds the configured limit")
+	}
+	return state, nil
+}
+
+func DecodeShellState(current Operation) (ShellState, error) {
 	if current.Type != TypeShell {
 		return ShellState{}, fmt.Errorf(
 			"advance shell operation %q: unsupported type %q: %w",
@@ -131,6 +172,9 @@ func shellOperationState(current Operation) (ShellState, error) {
 			current.Version,
 			ErrUnsupported,
 		)
+	}
+	if current.MaxOutputLength <= 0 || current.MaxOutputLength > MaxOutputLength {
+		return ShellState{}, errors.New("max output length is out of range")
 	}
 
 	var state ShellState
@@ -207,6 +251,10 @@ func (shell *Shell) handleAwaiting(event primitives.PrimitiveEvent) (Step, error
 	}
 		return shell.fail(err)
 	}
+	switch state.Phase {
+	case ShellPhaseCreateOut:
+	case ShellPhaseCreateErr:
+	}
 }
 
 func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPaths) (Step, error) {
@@ -243,6 +291,8 @@ func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPat
 
 	current, state := &shell.current, &shell.state
 	switch state.Phase {
+	case ShellPhaseReadOut, ShellPhaseReadOutTail:
+	case ShellPhaseReadErr, ShellPhaseReadErrTail:
 	default:
 	}
 }
@@ -260,6 +310,10 @@ func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPat
 	}
 }
 
+	}
+	}
+}
+
 	current, state := &shell.current, &shell.state
 
 		return shell.fail(errors.New("shell execution completed without an exit status"))
@@ -267,9 +321,12 @@ func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPat
 	state.Result = &ShellResult{
 		OutSize:  state.OutSize,
 		ErrSize:  state.ErrSize,
+	}
 	state.PendingExitCode = nil
 	state.InlineOut = nil
 	state.InlineErr = nil
+	state.InlineOutTail = nil
+	state.InlineErrTail = nil
 	state.Phase = ""
 	current.Status = StatusCompleted
 	return shell.checkpoint()
@@ -400,6 +457,9 @@ func (shell *Shell) await() (Step, error) {
 func (shell *Shell) checkpoint() (Step, error) {
 	current, state := &shell.current, &shell.state
 
+	if !state.ErrorTruncated {
+		state.TerminalError, state.ErrorTruncated = BoundOutput(state.TerminalError, current.MaxOutputLength)
+	}
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return Step{}, fmt.Errorf("encode shell operation %q state: %w", current.ID, err)
@@ -411,21 +471,33 @@ func (shell *Shell) checkpoint() (Step, error) {
 
 func (shell *Shell) fail(err error) (Step, error) {
 	shell.chunks, shell.readSize = nil, 0
+
 	current, state := &shell.current, &shell.state
 
 	state.Phase = ""
 	state.TerminalError = err.Error()
+	state.ErrorTruncated = false
 	current.Status = StatusFailed
 	return shell.checkpoint()
 }
 
 func (shell *Shell) cancel() (Step, error) {
 	shell.chunks, shell.readSize = nil, 0
+
 	current, state := &shell.current, &shell.state
 
 	state.Phase = ""
 	state.TerminalError = "shell operation canceled"
+	state.ErrorTruncated = false
 	current.Status = StatusCanceled
 	return shell.checkpoint()
 }
 
+func (current Operation) shellReadLimit() int64 {
+	return int64(current.MaxOutputLength) * utf8.UTFMax
+}
+
+func (current Operation) shellTailReadLimit() int64 {
+	limit := current.MaxOutputLength
+	return int64(limit-limit/2) * utf8.UTFMax
+}

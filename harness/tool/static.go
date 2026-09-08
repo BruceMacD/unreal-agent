@@ -38,6 +38,7 @@ func staticDefinitions() []Definition {
 						"type":        "string",
 						"description": "The shell command to execute.",
 					},
+					"max_output_length": maxOutputLengthSchema(),
 				},
 				"required": []any{"command"},
 			},
@@ -57,5 +58,14 @@ func staticDefinitions() []Definition {
 				"required": []any{"name"},
 			},
 		}},
+	}
+}
+
+func maxOutputLengthSchema() map[string]any {
+	return map[string]any{
+		"type":        "integer",
+		"minimum":     1,
+		"maximum":     operation.MaxOutputLength,
+		"default":     operation.DefaultMaxOutputLength,
 	}
 }

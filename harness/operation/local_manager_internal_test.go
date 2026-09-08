@@ -17,6 +17,7 @@ func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
 			exitCode := 0
 			state := ShellState{
 				Input: ShellInput{Shell: "/bin/sh"}, BaseDirectory: t.TempDir(),
+				Phase: phase, PendingExitCode: &exitCode,
 			}
 			contents := []byte("abcdefghijkl")
 			fullSize := int64(len(contents))
@@ -25,11 +26,24 @@ func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
 				state.InlineOut = []byte("stale")
 			case ShellPhaseReadErr:
 				state.InlineErr = []byte("stale")
+			case ShellPhaseReadOutTail:
+				state.InlineOutTail = []byte("stale")
+			case ShellPhaseReadErrTail:
+				state.InlineErrTail = []byte("stale")
+			}
+			if phase == ShellPhaseReadOutTail {
+				state.InlineOut, state.OutSize = []byte(strings.Repeat("h", 12)), 100
+				fullSize = 100
+			}
+			if phase == ShellPhaseReadErrTail {
+				state.InlineErr, state.ErrSize = []byte(strings.Repeat("h", 12)), 100
+				fullSize = 100
 			}
 			encoded, err := json.Marshal(state)
 			if err != nil {
 				t.Fatal(err)
 			}
+			current := Operation{ID: "shell", Type: TypeShell, Version: VersionShell, Status: StatusAwaiting, State: encoded, MaxOutputLength: 6}
 			execution, err := NewShell(current)
 			if err != nil {
 				t.Fatal(err)
@@ -83,11 +97,13 @@ func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
 			if err != nil || finished.Operation == nil {
 				t.Fatalf("finish read: %v", err)
 			}
+			assembled, err := DecodeShellState(*finished.Operation)
 			if err != nil {
 				t.Fatal(err)
 			}
 			switch phase {
 			case ShellPhaseReadOut:
+			case ShellPhaseReadOutTail:
 				if finished.Operation.Status != StatusCompleted || assembled.Result == nil || assembled.Result.ExitCode != 0 {
 				}
 			}
@@ -102,10 +118,12 @@ func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
 func TestShellReadValidatesChunksAndDiscardsThemOnTermination(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			encoded, err := json.Marshal(ShellState{
+				Input: ShellInput{Shell: "/bin/sh"}, BaseDirectory: t.TempDir(), Phase: ShellPhaseReadOut,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
+			current := Operation{ID: "shell", Type: TypeShell, Version: VersionShell, Status: StatusAwaiting, State: encoded, MaxOutputLength: 3}
 			execution, err := NewShell(current)
 			if err != nil {
 				t.Fatal(err)
@@ -143,6 +161,7 @@ func TestShellReadValidatesChunksAndDiscardsThemOnTermination(t *testing.T) {
 			if err != nil || step.Operation == nil || (step.Operation.Status != StatusCanceled && step.Operation.Status != StatusFailed) {
 				t.Fatalf("termination: %#v, %v", step, err)
 			}
+			state, err := DecodeShellState(*step.Operation)
 			if err != nil {
 				t.Fatal(err)
 			}

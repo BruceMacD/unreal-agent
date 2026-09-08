@@ -28,9 +28,21 @@ const (
 )
 
 type Spec struct {
+	MaxOutputLength int `json:",omitzero"`
+	Type            Type
+	Version         Version
+	State           jsontext.Value `json:",omitzero"`
+	Idempotency     jsontext.Value `json:",omitzero"`
 }
 
 type Operation struct {
+	MaxOutputLength int `json:",omitzero"`
+	ID              ID
+	Type            Type
+	Version         Version
+	Status          Status
+	State           jsontext.Value `json:",omitzero"`
+	Idempotency     jsontext.Value `json:",omitzero"`
 }
 
 type PrimitiveDispatch struct {

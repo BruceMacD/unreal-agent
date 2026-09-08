@@ -478,6 +478,13 @@ func (current *coordinator) scheduleToolCall(
 func (current *toolCallContext) Submit(spec operation.Spec) operation.ID {
 	id := operation.ID(uuid.New().String())
 	current.operations = append(current.operations, operation.Operation{
+		MaxOutputLength: spec.MaxOutputLength,
+		ID:              id,
+		Type:            spec.Type,
+		Version:         spec.Version,
+		Status:          operation.StatusReady,
+		State:           spec.State,
+		Idempotency:     spec.Idempotency,
 	})
 	return id
 }

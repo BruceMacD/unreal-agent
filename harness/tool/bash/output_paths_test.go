@@ -3,6 +3,7 @@ package bash_test
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,14 +12,101 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/primitives"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
 )
+
+func TestCapturePathsSurviveFailureAndCancellation(t *testing.T) {
+	for _, stage := range []struct {
+		name    string
+		creates int
+	}{
+		{"before captures", 1},
+		{"stdout exists", 2},
+		{"both captures exist", 3},
+	} {
+		for _, terminal := range []operation.Status{operation.StatusFailed, operation.StatusCanceled} {
+			t.Run(stage.name+"/"+string(terminal), func(t *testing.T) {
+				base := t.TempDir()
+				spec, err := operation.NewShellSpec(operation.ShellInput{Shell: "/bin/sh"}, base, 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				current := operation.Operation{ID: "captures", Type: spec.Type, Version: spec.Version, State: spec.State, MaxOutputLength: spec.MaxOutputLength, Status: operation.StatusReady}
+				step, err := advanceShellOnce(t, current, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for range stage.creates {
+					if len(step.Dispatches) != 1 || step.Dispatches[0].Type != primitives.PrimitiveDispatchIOCreate {
+						t.Fatalf("expected capture creation: %#v", step)
+					}
+					request := step.Dispatches[0].Data.(primitives.IOCreateRequest)
+					events := make(chan primitives.PrimitiveEvent)
+					primitives.Create(t.Context(), request, events)
+					event := <-events
+					if event.Type != primitives.PrimitiveEventIOCreateCompleted {
+						t.Fatalf("creation failed: %#v", event)
+					}
+					step, err = advanceShellOnce(t, *step.Operation, &event)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if terminal == operation.StatusFailed {
+					step, err = advanceShellOnce(t, *step.Operation, &primitives.PrimitiveEvent{
+						Source: primitives.SourceID(current.ID), Type: primitives.PrimitiveEventFailed,
+						Result: primitives.PrimitiveFailureResult{Error: "capture creation failed"},
+					})
+				} else {
+					step.Operation.Status = operation.StatusCanceling
+					step, err = advanceShellOnce(t, *step.Operation, nil)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				state, err := operation.DecodeShellState(*step.Operation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if step.Operation.Status != terminal || state.Result != nil {
+					t.Fatalf("unexpected terminal operation: %#v", step.Operation)
+				}
+				result, err := bash.New(bash.Config{}).TranslateResult("call", tool.CallStatus{}, []operation.Operation{*step.Operation})
+				if err != nil {
+					t.Fatal(err)
+				}
+				}
+				for _, stream := range []struct {
+				}{
+				} {
+					path := filepath.Join(base, string(current.ID), stream.filename)
+					_, statErr := os.Stat(path)
+					want := ""
+					if stream.exists {
+						if statErr != nil {
+							t.Fatal(statErr)
+						}
+						want = path
+					} else if !errors.Is(statErr, os.ErrNotExist) {
+						t.Fatalf("unexpected capture file at %q: %v", path, statErr)
+					}
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		stdout, stderr string
+		limit          int
 	}{
+		{name: "complete output", stdout: "ok"},
+		{name: "requested limit", stdout: "界界界界", stderr: "éééé", limit: 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			base := filepath.Join(t.TempDir(), "captures with spaces")
@@ -26,8 +114,18 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			translator := bash.New(bash.Config{
+				Shell: "/bin/sh", BaseDirectory: base,
 			})
 			submitted := &recordingContext{}
+			arguments := map[string]any{"command": `printf '%s' "$OUT"; printf '%s' "$ERR" >&2`}
+			if test.limit != 0 {
+				arguments["max_output_length"] = test.limit
+			}
+			encoded, err := json.Marshal(arguments)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := translator.Translate(submitted, llm.ToolCall{CallID: "call-1", Arguments: string(encoded)})
 			if status.Error != "" || len(submitted.specs) != 1 {
 				t.Fatalf("status = %#v", status)
 			}
@@ -35,6 +133,7 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			manager := operation.NewLocalOperationManager(ctx)
+			if err := manager.Add(operation.Operation{ID: status.WaitingFor[0], Type: spec.Type, Version: spec.Version, Status: operation.StatusReady, MaxOutputLength: spec.MaxOutputLength, State: spec.State}); err != nil {
 				t.Fatal(err)
 			}
 			var completed operation.Operation
@@ -55,9 +154,28 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			state, err := operation.DecodeShellState(completed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			}
 			for _, stream := range []struct {
 			}{
 			} {
+				if !filepath.IsAbs(stream.capturePath) || !strings.HasPrefix(stream.capturePath, base+string(filepath.Separator)) {
+					t.Fatalf("capture path = %q", stream.capturePath)
+				}
+				full, err := os.ReadFile(stream.capturePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(full) != stream.text {
+					t.Fatalf("capture does not contain full output: %q", full)
+				}
+				limit := test.limit
+				if limit == 0 {
+					limit = operation.DefaultMaxOutputLength
+				}
 				if stream.truncated != wantTruncated {
 					t.Fatalf("truncation = %t, want %t", stream.truncated, wantTruncated)
 				}
@@ -70,4 +188,13 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func advanceShellOnce(t *testing.T, current operation.Operation, event *primitives.PrimitiveEvent) (operation.Step, error) {
+	t.Helper()
+	shell, err := operation.NewShell(current)
+	if err != nil {
+		return operation.Step{}, err
+	}
+	return shell.Handle(event)
 }

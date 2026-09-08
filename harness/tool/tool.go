@@ -10,6 +10,9 @@ import (
 )
 
 type CallStatus struct {
+	Error          string
+	ErrorTruncated bool           `json:",omitzero"`
+	WaitingFor     []operation.ID `json:",omitzero"`
 }
 
 // Context is turn-local and coordinator-owned. Submit allocates an ID and

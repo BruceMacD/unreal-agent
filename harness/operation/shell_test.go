@@ -49,6 +49,9 @@ func TestShellActorCapturesArtifactsAndCompletes(t *testing.T) {
 	assertFileContents(t, filepath.Join(directory, operation.ShellErrFilename), []byte(stderr))
 }
 
+func TestShellSpecRejectsZeroInlineLength(t *testing.T) {
+	if _, err := operation.NewShellSpec(operation.ShellInput{Shell: testShellPath}, t.TempDir(), 0); err == nil {
+		t.Fatal("zero inline length was accepted")
 	}
 }
 
@@ -61,6 +64,10 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	initial := shellState(t, *step.Operation)
+	if initial.OutPath != "" || initial.ErrPath != "" {
+		t.Fatal("capture paths exposed before file creation")
+	}
 		request := oneDispatchData[primitives.IOCreateRequest](t, step, primitives.PrimitiveDispatchIOCreate)
 		events := make(chan primitives.PrimitiveEvent)
 		primitives.Create(t.Context(), request, events)
@@ -68,6 +75,17 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 		step, err = advanceShellOnce(t, *step.Operation, &event)
 		if err != nil {
 			t.Fatal(err)
+		}
+		state := shellState(t, *step.Operation)
+		wantOut, wantErr := "", ""
+		if index >= 1 {
+			wantOut = filepath.Join(baseDirectory, string(current.ID), operation.ShellOutFilename)
+		}
+		if index >= 2 {
+			wantErr = filepath.Join(baseDirectory, string(current.ID), operation.ShellErrFilename)
+		}
+		if state.OutPath != wantOut || state.ErrPath != wantErr {
+			t.Fatalf("capture paths after creation %d = %q, %q; want %q, %q", index, state.OutPath, state.ErrPath, wantOut, wantErr)
 		}
 	}
 
@@ -88,6 +106,9 @@ func TestShellActorPersistsSignalExitStatusBeforeReading(t *testing.T) {
 	id := operation.ID("shell-signaled")
 	directory := filepath.Join(baseDirectory, string(id))
 	current := shellOperationWithState(t, id, operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: baseDirectory,
+
 		Phase:          operation.ShellPhaseProcess,
 		ProcessGroupID: 4321,
 	})
@@ -110,6 +131,10 @@ func TestShellActorPersistsSignalExitStatusBeforeReading(t *testing.T) {
 
 func TestShellActorFailsUnknownProcessOutcomeWithoutRestarting(t *testing.T) {
 	current := shellOperationWithState(t, "shell-unknown", operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: t.TempDir(),
+
+		Phase: operation.ShellPhaseProcess,
 	})
 
 	step, err := advanceShellOnce(t, current, nil)
@@ -125,6 +150,9 @@ func TestShellActorFailsUnknownProcessOutcomeWithoutRestarting(t *testing.T) {
 
 func TestShellActorPreservesRecordedProcessWhenFailingRecovery(t *testing.T) {
 	current := shellOperationWithState(t, "shell-recover", operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: t.TempDir(),
+
 		Phase:          operation.ShellPhaseProcess,
 		ProcessGroupID: 4321,
 	})
@@ -146,12 +174,16 @@ func TestShellActorPreservesRecordedProcessWhenFailingRecovery(t *testing.T) {
 	directory := filepath.Join(baseDirectory, string(id))
 	exitCode := 5
 	current := shellOperationWithState(t, id, operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: baseDirectory,
+
 		PendingExitCode: &exitCode,
 	})
 
 	completed := runShellActor(t, t.Context(), current)
 	result := shellState(t, completed).Result
 	if completed.Status != operation.StatusCompleted || result == nil ||
+		result.Out != "out" || result.Err != "err" || result.ExitCode != 5 {
 		t.Fatalf("operation = %#v, result = %#v", completed, result)
 	}
 }
@@ -170,15 +202,22 @@ func TestShellActorRereadsAndReplacesInline(t *testing.T) {
 			InlineOut:       []byte("stale"),
 		})
 
+		current.MaxOutputLength = 10
 		resumed, err := advanceShellOnce(t, current, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		request := oneDispatchData[primitives.IOReadRequest](t, resumed, primitives.PrimitiveDispatchIORead)
+		if request.Offset != 0 || request.Count != 40 {
 			t.Fatalf("read request = %#v", request)
 		}
 
+		want := ""
+		if output != "" {
+		}
 		if completed.Status != operation.StatusCompleted || result == nil ||
+			result.Out != want || result.OutSize != int64(len(output)) ||
+			result.Err != "error" || result.ExitCode != 4 {
 			t.Fatalf("operation = %#v, result = %#v", completed, result)
 		}
 	}
@@ -214,11 +253,13 @@ func TestShellActorResumesEveryReplayablePhase(t *testing.T) {
 			name: "read stdout", state: operation.ShellState{
 				Phase: operation.ShellPhaseReadOut, PendingExitCode: &exitCode, InlineOut: []byte("ou"),
 			},
+			artifact: operation.ShellOutFilename, offset: 0, count: 40,
 		},
 		{
 			name: "read stderr", state: operation.ShellState{
 				Phase: operation.ShellPhaseReadErr, PendingExitCode: &exitCode, InlineErr: []byte("err"),
 			},
+			artifact: operation.ShellErrFilename, offset: 0, count: 40,
 		},
 	}
 
@@ -229,6 +270,7 @@ func TestShellActorResumesEveryReplayablePhase(t *testing.T) {
 			state.Input = operation.ShellInput{Shell: testShellPath}
 			state.BaseDirectory = baseDirectory
 			current := shellOperationWithState(t, id, state)
+			current.MaxOutputLength = 10
 
 			step, err := advanceShellOnce(t, current, nil)
 			if err != nil {
@@ -282,6 +324,7 @@ func TestNewShellSpecRejectsInvalidConfiguration(t *testing.T) {
 	for _, test := range []struct {
 		input         operation.ShellInput
 		baseDirectory string
+		maxInline     int
 	}{
 		{input: operation.ShellInput{}, baseDirectory: "/tmp"},
 		{input: operation.ShellInput{Shell: "sh"}, baseDirectory: "/tmp"},
@@ -296,16 +339,23 @@ func TestNewShellSpecRejectsInvalidConfiguration(t *testing.T) {
 
 func TestShellActorValidatesPersistedStateAndIdentity(t *testing.T) {
 	valid := operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: "/tmp",
+
+		Phase: operation.ShellPhaseReadOut,
 	}
 	for _, mutate := range []func(*operation.ShellState){
 		func(state *operation.ShellState) { state.ProcessGroupID = -1 },
 		func(state *operation.ShellState) { state.ProcessGroupID = 1 },
 		func(state *operation.ShellState) { state.OutSize = -1 },
 		func(state *operation.ShellState) { state.ErrSize = -1 },
+		func(state *operation.ShellState) { state.InlineOut = []byte("xxxxx") },
+		func(state *operation.ShellState) { state.InlineErr = []byte("xxxxx") },
 	} {
 		state := valid
 		mutate(&state)
 		current := shellOperationWithState(t, "shell-invalid", state)
+		current.MaxOutputLength = 1
 		if _, err := advanceShellOnce(t, current, nil); err == nil {
 			t.Fatalf("Shell accepted state %#v", state)
 		}
@@ -341,6 +391,9 @@ func TestShellActorCancellationIsTerminal(t *testing.T) {
 
 func TestShellActorCancellationPreservesRecordedProcess(t *testing.T) {
 	current := shellOperationWithState(t, "shell-cancel-process", operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: t.TempDir(),
+
 		Phase:          operation.ShellPhaseProcess,
 		ProcessGroupID: 4321,
 	})
@@ -570,12 +623,19 @@ func newShellOperation(
 	id operation.ID,
 	input operation.ShellInput,
 	baseDirectory string,
+	maxOutputLength int,
 ) operation.Operation {
 	t.Helper()
+	spec, err := operation.NewShellSpec(input, baseDirectory, maxOutputLength)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return operation.Operation{
+		ID:              id,
+		Type:            spec.Type,
+		Version:         spec.Version,
+		Status:          operation.StatusReady,
+		MaxOutputLength: spec.MaxOutputLength, State: spec.State,
 		Idempotency: spec.Idempotency,
 	}
 }
@@ -587,6 +647,12 @@ func shellOperationWithState(t *testing.T, id operation.ID, state operation.Shel
 		t.Fatal(err)
 	}
 	return operation.Operation{
+		ID:              id,
+		MaxOutputLength: operation.DefaultMaxOutputLength,
+		Type:            operation.TypeShell,
+		Version:         operation.VersionShell,
+		Status:          operation.StatusAwaiting,
+		State:           encoded,
 	}
 }
 
@@ -619,6 +685,124 @@ func assertFileContents(t *testing.T, path string, want []byte) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("contents of %q = %q, want %q", path, got, want)
+	}
+}
+
+func TestShellReadsActualTailWithBoundedState(t *testing.T) {
+	for _, test := range []struct {
+		name, text, want string
+		limit            int
+	}{
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := t.TempDir()
+			id := operation.ID("tail")
+			directory := filepath.Join(base, string(id))
+			exitCode := 0
+			current := shellOperationWithState(t, id, operation.ShellState{
+				Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
+				Phase: operation.ShellPhaseReadOut, PendingExitCode: &exitCode,
+			})
+			current.MaxOutputLength = test.limit
+			tailReads := 0
+			completed := runShellActorObserved(t, t.Context(), current, func(update operation.Operation, event primitives.PrimitiveEvent) {
+				state := shellState(t, update)
+				if len(state.InlineOut)+len(state.InlineOutTail) > 4*test.limit || len(state.InlineErr)+len(state.InlineErrTail) > 4*test.limit {
+					t.Fatal("captured state exceeds its byte budget")
+				}
+					tailReads++
+				}
+			})
+			state := shellState(t, completed)
+			if completed.Status != operation.StatusCompleted || state.Result == nil {
+				t.Fatalf("operation failed: %#v", state)
+			}
+			}
+			if state.Result.OutSize != int64(len(test.text)) || state.Result.ErrSize != int64(len(test.text)) {
+				t.Fatal("original output byte counts changed")
+			}
+			if len(state.InlineOut)+len(state.InlineErr)+len(state.InlineOutTail)+len(state.InlineErrTail) != 0 {
+				t.Fatal("completed operation retained capture buffers")
+			}
+			assertFileContents(t, state.OutPath, []byte(test.text))
+			assertFileContents(t, state.ErrPath, []byte(test.text))
+		})
+	}
+}
+
+func TestShellRereadsAndReplacesTail(t *testing.T) {
+	text := "HEAD" + strings.Repeat("x", 100) + "TAIL!"
+	for _, phase := range []operation.ShellPhase{operation.ShellPhaseReadOutTail, operation.ShellPhaseReadErrTail} {
+		t.Run(string(phase), func(t *testing.T) {
+			base := t.TempDir()
+			id := operation.ID("resume-tail")
+			exitCode := 0
+			state := operation.ShellState{
+				Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
+				Phase: phase, PendingExitCode: &exitCode,
+				InlineOut: []byte(text[:20]), OutSize: int64(len(text)),
+				InlineOutTail: []byte("stale"),
+			}
+			if phase == operation.ShellPhaseReadErrTail {
+				state.InlineOutTail = []byte(text[len(text)-20:])
+				state.InlineErr, state.ErrSize = []byte(text[:20]), int64(len(text))
+				state.InlineErrTail = []byte("stale")
+			}
+			current := shellOperationWithState(t, id, state)
+			current.MaxOutputLength = 10
+			step, err := advanceShellOnce(t, current, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := oneDispatchData[primitives.IOReadRequest](t, step, primitives.PrimitiveDispatchIORead)
+			if request.Offset != int64(len(text)-20) || request.Count != 20 {
+				t.Fatalf("tail resume request = %#v", request)
+			}
+			completed := runShellActor(t, t.Context(), *step.Operation)
+			result := shellState(t, completed).Result
+				t.Fatalf("result after resume = %#v", result)
+			}
+		})
+	}
+}
+
+func TestShellRejectsInvalidTailEvents(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		event primitives.PrimitiveEvent
+	}{
+		{"wrong offset", primitives.PrimitiveEvent{Type: primitives.PrimitiveEventIOReadOutput, Result: primitives.IOReadOutputResult{Offset: 79, Data: []byte("x")}}},
+		{"oversized chunk", primitives.PrimitiveEvent{Type: primitives.PrimitiveEventIOReadOutput, Result: primitives.IOReadOutputResult{Offset: 80, Data: bytes.Repeat([]byte("x"), 21)}}},
+		{"incomplete tail", primitives.PrimitiveEvent{Type: primitives.PrimitiveEventIOReadCompleted, Result: primitives.IOReadCompletedResult{Size: 100}}},
+		{"changed size", primitives.PrimitiveEvent{Type: primitives.PrimitiveEventIOReadCompleted, Result: primitives.IOReadCompletedResult{Size: 101}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := operation.ShellState{
+				Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: t.TempDir(),
+				Phase: operation.ShellPhaseReadOutTail, OutSize: 100, InlineOut: bytes.Repeat([]byte("h"), 20),
+			}
+			current := shellOperationWithState(t, "invalid-tail", state)
+			current.MaxOutputLength = 10
+			event := test.event
+			shell, err := operation.NewShell(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.name == "changed size" {
+				if _, err := shell.Handle(&primitives.PrimitiveEvent{
+					Result: primitives.IOReadOutputResult{Offset: 80, Data: bytes.Repeat([]byte("t"), 20)},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			step, err := shell.Handle(&event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if step.Operation.Status != operation.StatusFailed || len(step.Dispatches) != 0 {
+				t.Fatalf("invalid tail event was accepted: %#v", step)
+			}
+		})
 	}
 }
 

@@ -12,6 +12,9 @@ import (
 )
 
 type Config struct {
+	Shell         string
+	Directory     string
+	BaseDirectory string
 }
 
 type translator struct {
@@ -23,7 +26,13 @@ func New(config Config) tool.Translator {
 }
 
 func (translator *translator) Translate(ctx tool.Context, call llm.ToolCall) tool.CallStatus {
+	command, limit, err := validateArguments(call.Arguments)
 	if err != nil {
+		return tool.ErrorStatus(err.Error(), limit)
+	}
+	spec, err := translator.buildOperation(command, limit)
+	if err != nil {
+		return tool.ErrorStatus(err.Error(), limit)
 	}
 
 	id := ctx.Submit(spec)
@@ -54,6 +63,8 @@ func translateOperationResult(
 		)
 	}
 
+	state, err := operation.DecodeShellState(current)
+	if err != nil {
 	}
 	}
 	if state.Result != nil {
@@ -61,20 +72,32 @@ func translateOperationResult(
 	}
 }
 
+func validateArguments(encoded string) (string, int, error) {
 	var arguments map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(encoded), &arguments); err != nil {
+		return "", 0, fmt.Errorf("decode Bash arguments: %w", err)
+	}
+	limit, err := tool.ParseMaxOutputLength(arguments["max_output_length"])
+	if err != nil {
+		return "", 0, fmt.Errorf("bash argument: %w", err)
 	}
 	encodedCommand, exists := arguments["command"]
 	if !exists {
+		return "", limit, errors.New(`bash argument "command" must be set`)
 	}
 	var command *string
 	if err := json.Unmarshal(encodedCommand, &command); err != nil {
+		return "", limit, fmt.Errorf(`decode Bash argument "command": %w`, err)
 	}
 	if command == nil {
+		return "", limit, errors.New(`bash argument "command" must be a string`)
 	}
+	return *command, limit, nil
 }
 
+func (translator *translator) buildOperation(command string, limit int) (operation.Spec, error) {
 	spec, err := operation.NewShellSpec(operation.ShellInput{
+	}, translator.config.BaseDirectory, limit)
 	if err != nil {
 		return operation.Spec{}, fmt.Errorf("build Bash operation: %w", err)
 	}

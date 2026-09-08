@@ -27,6 +27,7 @@ func TestLocalOperationManagerRunsShellOperation(t *testing.T) {
 	if completed.Status != operation.StatusCompleted || state.Result == nil || state.TerminalError != "" {
 		t.Fatalf("operation = %#v, state = %#v", completed, state)
 	}
+	if state.Result.Out != "output" || state.Result.Err != "error" ||
 		state.Result.OutSize != 6 || state.Result.ErrSize != 5 || state.Result.ExitCode != 7 {
 		t.Fatalf("result = %#v", state.Result)
 	}
@@ -59,6 +60,7 @@ func TestLocalOperationManagerRunsMultipleShellOperations(t *testing.T) {
 				continue
 			}
 			result := shellState(t, current).Result
+			if result == nil || result.Out != want[current.ID] {
 				t.Fatalf("operation = %#v, result = %#v", current, result)
 			}
 			completed[current.ID] = struct{}{}
@@ -119,6 +121,7 @@ func TestLocalOperationManagerQueuesUpdatesWhileUnread(t *testing.T) {
 				if lastRank != len(phases)-1 {
 					t.Fatalf("last phase rank = %d, want %d", lastRank, len(phases)-1)
 				}
+				if state.Result == nil || state.Result.Out != "output" || state.Result.ExitCode != 0 {
 					t.Fatalf("operation = %#v, state = %#v", update, state)
 				}
 				cancel()
@@ -161,8 +164,12 @@ func TestLocalOperationManagerResumesShellOperation(t *testing.T) {
 	)
 	exitCode := 5
 	current := shellOperationWithState(t, id, operation.ShellState{
+		Input:         operation.ShellInput{Shell: testShellPath},
+		BaseDirectory: baseDirectory,
+
 		Phase:           operation.ShellPhaseReadOut,
 		PendingExitCode: &exitCode,
+		InlineOut:       []byte("ou"),
 	})
 	manager := operation.NewLocalOperationManager(t.Context())
 
@@ -172,6 +179,7 @@ func TestLocalOperationManagerResumesShellOperation(t *testing.T) {
 	completed := receiveTerminalOperation(t, manager.Updates(), id)
 	result := shellState(t, completed).Result
 	if completed.Status != operation.StatusCompleted || result == nil ||
+		result.Out != "output" || result.Err != "error" || result.ExitCode != 5 {
 		t.Fatalf("operation = %#v, result = %#v", completed, result)
 	}
 }
@@ -367,6 +375,7 @@ func TestLocalOperationManagerIsolatesPrimitiveFailure(t *testing.T) {
 	}
 	succeededState := shellState(t, terminal[succeeded.ID])
 	if terminal[succeeded.ID].Status != operation.StatusCompleted ||
+		succeededState.Result == nil || succeededState.Result.Out != "success" {
 		t.Fatalf("succeeded operation = %#v, state = %#v", terminal[succeeded.ID], succeededState)
 	}
 }
@@ -529,12 +538,16 @@ func waitForFileContents(t *testing.T, path string, want string) {
 func TestShellCaptureUpdateVolumeScalesLinearly(t *testing.T) {
 	var previousBytes int64
 	var previousUpdates int
+	for _, limit := range []int{250_000, operation.MaxOutputLength} {
 		base := t.TempDir()
 		id := operation.ID("large-capture")
+		contents := []byte(strings.Repeat("x", 4*limit+1))
 		exitCode := 0
 		current := shellOperationWithState(t, id, operation.ShellState{
 			Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
+			Phase: operation.ShellPhaseReadOut, PendingExitCode: &exitCode,
 		})
+		current.MaxOutputLength = limit
 		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 		defer cancel()
 		manager := operation.NewLocalOperationManager(ctx)
@@ -560,6 +573,7 @@ func TestShellCaptureUpdateVolumeScalesLinearly(t *testing.T) {
 			}
 			serializedBytes += int64(len(encoded))
 			updates++
+			if updates > 6 || serializedBytes > 32*int64(limit) {
 				t.Fatalf("limit %d produced %d updates totaling %d bytes", limit, updates, serializedBytes)
 			}
 			if update.Status == operation.StatusFailed || update.Status == operation.StatusCanceled {
@@ -567,6 +581,8 @@ func TestShellCaptureUpdateVolumeScalesLinearly(t *testing.T) {
 			}
 			if update.Status == operation.StatusCompleted {
 				state := shellState(t, update)
+				if state.Result == nil || state.Result.OutSize != int64(len(contents)) || state.Result.ErrSize != int64(len(contents)) || !state.OutTruncated || !state.ErrTruncated {
+					t.Fatal("completed capture lost its result or truncation metadata")
 				}
 				break
 			}

@@ -23,6 +23,9 @@ func (ctx *recordingContext) Submit(spec operation.Spec) operation.ID {
 
 func TestTranslatorSubmitsShellOperation(t *testing.T) {
 	config := bash.Config{
+		Shell:         "/bin/bash",
+		Directory:     "/workspace",
+		BaseDirectory: "/operations",
 	}
 	translator := bash.New(config)
 	ctx := &recordingContext{}
@@ -51,6 +54,7 @@ func TestTranslatorSubmitsShellOperation(t *testing.T) {
 	if !reflect.DeepEqual(state.Input, wantInput) {
 		t.Fatalf("shell input = %#v, want %#v", state.Input, wantInput)
 	}
+	if state.BaseDirectory != config.BaseDirectory || spec.MaxOutputLength != operation.DefaultMaxOutputLength {
 		t.Fatalf("shell configuration = %#v", state)
 	}
 }
@@ -66,7 +70,11 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 			name:   "completed",
 			status: operation.StatusCompleted,
 			state: operation.ShellState{
+				Input:         operation.ShellInput{Command: "secret command"},
+				BaseDirectory: "/secret/path",
+
 				Result: &operation.ShellResult{
+					Out:     "ok\n",
 					OutSize: 3,
 				},
 			},
@@ -80,6 +88,7 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 			name:   "nonzero exit with stderr",
 			status: operation.StatusCompleted,
 			state: operation.ShellState{Result: &operation.ShellResult{
+				Err: "command failed\n", ErrSize: 15, ExitCode: 7,
 			}},
 		},
 		{
@@ -90,27 +99,33 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 		{
 			name:   "truncated stderr",
 			status: operation.StatusCompleted,
+				Out: "output", OutSize: 6,
 			}},
 		},
 		{
 			name:   "ready",
+			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true},
 			status: operation.StatusReady,
 		},
 		{
 			name:   "awaiting",
+			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true},
 			status: operation.StatusAwaiting,
 		},
 		{
 			name:   "canceling",
+			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true},
 			status: operation.StatusCanceling,
 		},
 		{
 			name:   "canceled",
 			status: operation.StatusCanceled,
+			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true, TerminalError: "canceled by user"},
 		},
 		{
 			name:   "failed",
 			status: operation.StatusFailed,
+			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true, TerminalError: "process failed"},
 		},
 	}
 	translator := bash.New(bash.Config{})
@@ -123,6 +138,9 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 			result, err := translator.TranslateResult("call-1", tool.CallStatus{}, []operation.Operation{{
 				ID:      "operation-1",
 				Type:    operation.TypeShell,
+				Version: operation.VersionShell, MaxOutputLength: operation.DefaultMaxOutputLength,
+				Status: test.status,
+				State:  state,
 			}})
 			if err != nil {
 				t.Fatal(err)
@@ -172,12 +190,14 @@ func TestTranslatorRejectsInvalidShellOperationResults(t *testing.T) {
 		{
 			name: "wrong type",
 			operations: []operation.Operation{{
+				ID: "operation-1", Type: "other", Version: operation.VersionShell, MaxOutputLength: operation.DefaultMaxOutputLength,
 			}},
 			want: `has type "other", want "shell"`,
 		},
 		{
 			name: "malformed state",
 			operations: []operation.Operation{{
+				ID: "operation-1", Type: operation.TypeShell, Version: operation.VersionShell, MaxOutputLength: operation.DefaultMaxOutputLength,
 				State: []byte(`{`),
 			}},
 			want: "decode Bash operation",
@@ -185,6 +205,7 @@ func TestTranslatorRejectsInvalidShellOperationResults(t *testing.T) {
 		{
 			name: "completed without result",
 			operations: []operation.Operation{{
+				ID: "operation-1", Type: operation.TypeShell, Version: operation.VersionShell, MaxOutputLength: operation.DefaultMaxOutputLength,
 				Status: operation.StatusCompleted, State: validState,
 			}},
 			want: "completed operation",

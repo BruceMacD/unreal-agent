@@ -1494,6 +1494,8 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstSpec.MaxOutputLength = 3
+	secondSpec.MaxOutputLength = 7
 	translator := &submittingTranslator{specs: []operation.Spec{firstSpec, secondSpec}}
 	handled := llm.ToolCall{CallID: "call-handled", Name: tool.BashName, Arguments: `{}`}
 	missing := llm.ToolCall{CallID: "call-missing", Name: tool.BashName, Arguments: `{}`}
@@ -1550,6 +1552,7 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 	wantOperations := make(map[operation.ID]operation.Operation, len(status.Operations))
 	for index, value := range status.Operations {
 		if value.ID == "" || value.ID != status.Status.WaitingFor[index] ||
+			value.Status != operation.StatusReady || value.MaxOutputLength != translator.specs[index].MaxOutputLength {
 			t.Fatalf("scheduled operation %d = %#v", index, value)
 		}
 		wantOperations[value.ID] = value

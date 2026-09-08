@@ -32,7 +32,9 @@ func TestItemJSONRoundTrip(t *testing.T) {
 			}}},
 		}},
 		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemToolCallStatus, Data: ToolCallStatus{
+			TurnID: "turn-1", CallID: "call-1", Status: tool.CallStatus{Error: "in…3 chars truncated…id", ErrorTruncated: true},
 			Operations: []operation.Operation{{
+				ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusCompleted, MaxOutputLength: 123,
 			}},
 		}},
 	}

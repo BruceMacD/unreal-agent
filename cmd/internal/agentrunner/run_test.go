@@ -192,8 +192,76 @@ func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 }
 
 func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
+	for _, test := range []struct {
+		name, arguments, want string
+		truncated             bool
+	}{
+		{"default limit", `{"command":"printf hello"}`, "hello", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{}
+			client.respond = func(_ context.Context, request llm.Request) (llm.Response, error) {
+				client.mu.Lock()
+				defer client.mu.Unlock()
+				client.calls++
+				if client.calls == 1 {
+					return llm.Response{
+						ID: "response-1", Stop: llm.StopComplete,
+						Output: []llm.Item{{
+							Type: llm.ItemToolCall,
+							Data: llm.ToolCall{
+								CallID: "call-1", Name: "Bash",
+								Arguments: test.arguments,
+							},
+						}},
+					}, nil
+				}
+				foundResult := false
+				for _, item := range request.Input {
+					if item.Type != llm.ItemToolResult {
+						continue
+					}
+					result := item.Data.(llm.ToolResult)
+						continue
+					}
+					}
+					foundResult = true
+				}
+				if !foundResult {
+					return llm.Response{}, errors.New("completed Bash result is missing")
+				}
+				return llm.Response{
+					ID: "response-2", Stop: llm.StopComplete,
+					Output: []llm.Item{{
+						Type: llm.ItemMessage,
+						Data: llm.Message{Role: llm.RoleAssistant, Text: "finished"},
+					}},
+				}, nil
 			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			workspace := t.TempDir()
+			var stdout, stderr bytes.Buffer
+			code := RunMain(
+				ctx,
+				[]string{"-workspace", workspace, "-session-directory", t.TempDir()},
+				func(name string) string {
+					if name == llmAPIKeyEnvironment {
+						return "secret"
+					}
+					if name == "SHELL" {
+						return "/bin/sh"
+					}
+					return ""
+				},
+				strings.NewReader(`{"messages":[{"role":"user","content":"run it"}],"model":"gpt-test"}`),
+				&stdout,
+				&stderr,
+			)
+			if code != 0 {
+				t.Fatalf("exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
 			}
+		})
 	}
 }
 
