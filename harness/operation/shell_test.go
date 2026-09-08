@@ -57,6 +57,7 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 	current := newShellOperation(t, "shell-request", operation.ShellInput{
 	}, baseDirectory, 10)
 
+	step, err := advanceShellOnce(t, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +65,7 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 		events := make(chan primitives.PrimitiveEvent)
 		primitives.Create(t.Context(), request, events)
 		event := receiveOnlyPrimitiveEvent(t, events)
+		step, err = advanceShellOnce(t, *step.Operation, &event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,10 +97,12 @@ func TestShellActorPersistsSignalExitStatusBeforeReading(t *testing.T) {
 		Result:        primitives.ProcessExitResult{ExitCode: -1, Signal: syscall.SIGTERM},
 	}
 
+	step, err := advanceShellOnce(t, current, &event)
 	if err != nil {
 		t.Fatal(err)
 	}
 	}
+	state := shellState(t, *step.Operation)
 		state.PendingExitCode == nil || *state.PendingExitCode != 143 {
 		t.Fatalf("state = %#v", state)
 	}
@@ -108,9 +112,11 @@ func TestShellActorFailsUnknownProcessOutcomeWithoutRestarting(t *testing.T) {
 	current := shellOperationWithState(t, "shell-unknown", operation.ShellState{
 	})
 
+	step, err := advanceShellOnce(t, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	state := shellState(t, *step.Operation)
 	if step.Operation.Status != operation.StatusFailed || len(step.Dispatches) != 0 ||
 		!strings.Contains(state.TerminalError, "outcome is unknown") {
 		t.Fatalf("step = %#v, state = %#v", step, state)
@@ -123,9 +129,11 @@ func TestShellActorPreservesRecordedProcessWhenFailingRecovery(t *testing.T) {
 		ProcessGroupID: 4321,
 	})
 
+	step, err := advanceShellOnce(t, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	state := shellState(t, *step.Operation)
 	if step.Operation.Status != operation.StatusFailed || len(step.Dispatches) != 0 ||
 		state.ProcessGroupID != 4321 ||
 		!strings.Contains(state.TerminalError, "interrupted before an exit status") {
@@ -148,8 +156,31 @@ func TestShellActorPreservesRecordedProcessWhenFailingRecovery(t *testing.T) {
 	}
 }
 
+func TestShellActorRereadsAndReplacesInline(t *testing.T) {
+	for _, output := range []string{"prefixMOREtail", ""} {
+		baseDirectory := t.TempDir()
+		id := operation.ID("shell-resume-read")
+		directory := filepath.Join(baseDirectory, string(id))
+		exitCode := 4
+		current := shellOperationWithState(t, id, operation.ShellState{
+			Input:           operation.ShellInput{Shell: testShellPath},
+			BaseDirectory:   baseDirectory,
+			Phase:           operation.ShellPhaseReadOut,
+			PendingExitCode: &exitCode,
+			InlineOut:       []byte("stale"),
+		})
 
+		resumed, err := advanceShellOnce(t, current, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := oneDispatchData[primitives.IOReadRequest](t, resumed, primitives.PrimitiveDispatchIORead)
+			t.Fatalf("read request = %#v", request)
+		}
 
+		if completed.Status != operation.StatusCompleted || result == nil ||
+			t.Fatalf("operation = %#v, result = %#v", completed, result)
+		}
 	}
 }
 
@@ -199,6 +230,7 @@ func TestShellActorResumesEveryReplayablePhase(t *testing.T) {
 			state.BaseDirectory = baseDirectory
 			current := shellOperationWithState(t, id, state)
 
+			step, err := advanceShellOnce(t, current, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,10 +306,13 @@ func TestShellActorValidatesPersistedStateAndIdentity(t *testing.T) {
 		state := valid
 		mutate(&state)
 		current := shellOperationWithState(t, "shell-invalid", state)
+		if _, err := advanceShellOnce(t, current, nil); err == nil {
+			t.Fatalf("Shell accepted state %#v", state)
 		}
 	}
 
 	current := shellOperationWithState(t, "../invalid", valid)
+	step, err := advanceShellOnce(t, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,14 +323,17 @@ func TestShellActorValidatesPersistedStateAndIdentity(t *testing.T) {
 
 func TestShellActorCancellationIsTerminal(t *testing.T) {
 	current := newShellOperation(t, "shell-cancel", operation.ShellInput{Shell: testShellPath}, t.TempDir(), 10)
+	step, err := advanceShellOnce(t, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	step.Operation.Status = operation.StatusCanceling
 
+	canceled, err := advanceShellOnce(t, *step.Operation, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	state := shellState(t, *canceled.Operation)
 	if canceled.Operation.Status != operation.StatusCanceled || len(canceled.Dispatches) != 0 || state.TerminalError == "" {
 		t.Fatalf("step = %#v, state = %#v", canceled, state)
 	}
@@ -308,9 +346,11 @@ func TestShellActorCancellationPreservesRecordedProcess(t *testing.T) {
 	})
 	current.Status = operation.StatusCanceling
 
+	canceled, err := advanceShellOnce(t, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	state := shellState(t, *canceled.Operation)
 	if canceled.Operation.Status != operation.StatusCanceled ||
 		len(canceled.Dispatches) != 0 || state.ProcessGroupID != 4321 || state.Phase != "" {
 		t.Fatalf("operation = %#v, state = %#v", canceled.Operation, state)
@@ -366,6 +406,11 @@ func runShellActorObserved(
 	runtimeContext, cancelRuntime := context.WithCancel(t.Context())
 	defer cancelRuntime()
 
+	shell, err := operation.NewShell(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := shell.Handle(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,6 +422,8 @@ func runShellActorObserved(
 		}
 	}()
 
+	current = *step.Operation
+	for current.Status == operation.StatusAwaiting {
 		if len(step.Dispatches) > 1 {
 			t.Fatalf("dispatches = %#v, want at most one", step.Dispatches)
 		}
@@ -396,6 +443,7 @@ func runShellActorObserved(
 			cancelRuntime()
 			drainPrimitiveInvocation(active.events)
 			active = nil
+			step, err = shell.Handle(&primitives.PrimitiveEvent{Type: primitives.PrimitiveEventCanceled, Source: primitives.SourceID(current.ID)})
 
 		case event, open := <-active.events:
 			if !open {
@@ -408,12 +456,19 @@ func runShellActorObserved(
 			if primitiveEventIsTerminal(event) {
 				active = nil
 			}
+			step, err = shell.Handle(&event)
+			if err == nil && step.Operation != nil && observe != nil {
+				observe(*step.Operation, event)
 			}
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
+		if step.Operation != nil {
+			current = *step.Operation
+		}
 	}
+	return current
 }
 
 type primitiveInvocation struct {
@@ -565,4 +620,13 @@ func assertFileContents(t *testing.T, path string, want []byte) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("contents of %q = %q, want %q", path, got, want)
 	}
+}
+
+func advanceShellOnce(t *testing.T, current operation.Operation, event *primitives.PrimitiveEvent) (operation.Step, error) {
+	t.Helper()
+	shell, err := operation.NewShell(current)
+	if err != nil {
+		return operation.Step{}, err
+	}
+	return shell.Handle(event)
 }

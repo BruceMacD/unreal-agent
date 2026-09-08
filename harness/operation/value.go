@@ -76,4 +76,5 @@ func AdvanceValue(current Operation, event *primitives.PrimitiveEvent) (Step, er
 			ErrUnsupported,
 		)
 	}
+	return Step{Operation: &current}, nil
 }

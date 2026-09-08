@@ -1,6 +1,7 @@
 package operation
 
 import (
+	"bytes"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -47,6 +48,22 @@ type ShellState struct {
 	TerminalError   string
 }
 
+type Shell struct {
+	current  Operation
+	state    ShellState
+	chunks   [][]byte
+	readSize int64
+}
+
+func NewShell(current Operation) (*Shell, error) {
+	state, err := shellOperationState(current)
+	if err != nil {
+		return nil, err
+	}
+	current.State = nil
+	return &Shell{current: current, state: state}, nil
+}
+
 func NewShellSpec(
 	input ShellInput,
 	baseDirectory string,
@@ -65,6 +82,8 @@ func NewShellSpec(
 	}, nil
 }
 
+func (shell *Shell) Handle(event *primitives.PrimitiveEvent) (Step, error) {
+	current, state := &shell.current, &shell.state
 
 	switch current.Status {
 	case StatusReady:
@@ -76,16 +95,20 @@ func NewShellSpec(
 		}
 		paths, pathErr := newShellPaths(state.BaseDirectory, current.ID)
 		if pathErr != nil {
+			return shell.fail(pathErr)
 		}
 
 	case StatusAwaiting:
 		if event == nil {
+			return shell.resume()
 		}
+		return shell.handleAwaiting(*event)
 
 	case StatusCanceling:
 		if event != nil {
 			return Step{}, fmt.Errorf("advance canceling shell operation %q: unexpected primitive event", current.ID)
 		}
+		return shell.cancel()
 
 	default:
 		return Step{}, fmt.Errorf("advance shell operation %q: terminal status %q", current.ID, current.Status)
@@ -117,17 +140,24 @@ func shellOperationState(current Operation) (ShellState, error) {
 	return state, nil
 }
 
+func (shell *Shell) resume() (Step, error) {
+	current, state := &shell.current, &shell.state
+
 	if state.Phase == ShellPhaseProcess {
 		if state.ProcessGroupID == 0 {
+			return shell.fail(errors.New("shell execution outcome is unknown because process start was not recorded"))
 		}
+		return shell.fail(errors.New("shell execution was interrupted before an exit status was recorded"))
 	}
 
 	paths, err := newShellPaths(state.BaseDirectory, current.ID)
 	if err != nil {
+		return shell.fail(err)
 	}
 
 	switch state.Phase {
 	case ShellPhaseCreateDirectory:
+		return shell.dispatch(createShellPath(
 			current.ID,
 			primitives.IOCreateDirectory,
 			paths.directory,
@@ -136,59 +166,82 @@ func shellOperationState(current Operation) (ShellState, error) {
 	case ShellPhaseCreateOut:
 	case ShellPhaseCreateErr:
 	default:
+		return shell.fail(fmt.Errorf("shell operation has invalid phase %q", state.Phase))
 	}
 }
 
+func (shell *Shell) handleAwaiting(event primitives.PrimitiveEvent) (Step, error) {
+	current, state := &shell.current, &shell.state
+
 	if event.Source != primitives.SourceID(current.ID) {
+		return shell.fail(fmt.Errorf(
 			"shell primitive event source is %q, want %q",
 			event.Source,
 			current.ID,
 		))
 	}
 	if event.Type == primitives.PrimitiveEventCanceled {
+		return shell.cancel()
 	}
 	if event.Type == primitives.PrimitiveEventFailed {
+		return shell.fail(shellPrimitiveFailure(event))
 	}
 	paths, err := newShellPaths(state.BaseDirectory, current.ID)
 	if err != nil {
+		return shell.fail(err)
 	}
 
 	switch state.Phase {
 
 	case ShellPhaseProcess:
+		return shell.processEvent(event, paths)
 
+		return shell.readEvent(event, paths)
 
 	default:
+		return shell.fail(fmt.Errorf("shell operation has invalid phase %q", state.Phase))
 	}
 }
 
+	state := &shell.state
 	}
+		return shell.fail(err)
 	}
 }
+
+func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPaths) (Step, error) {
+	state := &shell.state
 
 	switch event.Type {
 	case primitives.PrimitiveEventProcessStarted:
 		started, ok := event.Result.(primitives.ProcessStartedResult)
 		if !ok || started.PID <= 1 {
+			return shell.fail(errors.New("start shell returned an invalid result"))
 		}
 		state.ProcessGroupID = started.PID
+		return shell.await()
 
 	case primitives.PrimitiveEventProcessExited:
 		exit, ok := event.Result.(primitives.ProcessExitResult)
 		if !ok {
+			return shell.fail(errors.New("shell returned an invalid exit result"))
 		}
 		exitCode := shellExitStatus(exit)
 		state.ProcessGroupID = 0
 		state.PendingExitCode = &exitCode
 
 	case primitives.PrimitiveEventProcessOutput:
+		return shell.fail(errors.New("captured shell process produced an unexpected output event"))
 
 	case primitives.PrimitiveEventProcessStreamFailed:
+		return shell.fail(errors.New("captured shell process returned an unexpected stream failure"))
 
 	default:
+		return shell.fail(fmt.Errorf("shell process returned unexpected event %q", event.Type))
 	}
 }
 
+	current, state := &shell.current, &shell.state
 	switch state.Phase {
 	default:
 	}
@@ -201,11 +254,15 @@ func shellOperationState(current Operation) (ShellState, error) {
 	case primitives.PrimitiveEventIOReadCompleted:
 		result, ok := event.Result.(primitives.IOReadCompletedResult)
 		}
+		shell.chunks, shell.readSize = nil, 0
 
 	default:
 	}
 }
 
+	current, state := &shell.current, &shell.state
+
+		return shell.fail(errors.New("shell execution completed without an exit status"))
 	}
 	state.Result = &ShellResult{
 		OutSize:  state.OutSize,
@@ -215,6 +272,7 @@ func shellOperationState(current Operation) (ShellState, error) {
 	state.InlineErr = nil
 	state.Phase = ""
 	current.Status = StatusCompleted
+	return shell.checkpoint()
 }
 
 type shellPaths struct {
@@ -323,6 +381,8 @@ func shellPrimitiveFailure(event primitives.PrimitiveEvent) error {
 	return errors.New(failure.Error)
 }
 
+func (shell *Shell) dispatch(dispatch PrimitiveDispatch) (Step, error) {
+	step, err := shell.await()
 	if err != nil {
 		return Step{}, err
 	}
@@ -330,20 +390,42 @@ func shellPrimitiveFailure(event primitives.PrimitiveEvent) error {
 	return step, nil
 }
 
+func (shell *Shell) await() (Step, error) {
+	current := &shell.current
+
 	current.Status = StatusAwaiting
+	return shell.checkpoint()
 }
+
+func (shell *Shell) checkpoint() (Step, error) {
+	current, state := &shell.current, &shell.state
 
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return Step{}, fmt.Errorf("encode shell operation %q state: %w", current.ID, err)
 	}
+	checkpoint := *current
+	checkpoint.State = encoded
+	return Step{Operation: &checkpoint}, nil
 }
+
+func (shell *Shell) fail(err error) (Step, error) {
+	shell.chunks, shell.readSize = nil, 0
+	current, state := &shell.current, &shell.state
 
 	state.Phase = ""
 	state.TerminalError = err.Error()
 	current.Status = StatusFailed
+	return shell.checkpoint()
 }
+
+func (shell *Shell) cancel() (Step, error) {
+	shell.chunks, shell.readSize = nil, 0
+	current, state := &shell.current, &shell.state
 
 	state.Phase = ""
 	state.TerminalError = "shell operation canceled"
 	current.Status = StatusCanceled
+	return shell.checkpoint()
+}
+

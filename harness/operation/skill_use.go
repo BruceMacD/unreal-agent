@@ -189,6 +189,7 @@ func skillUseStep(current Operation, state SkillUseState) (Step, error) {
 		return Step{}, fmt.Errorf("encode skill-use operation %q state: %w", current.ID, err)
 	}
 	current.State = encoded
+	return Step{Operation: &current}, nil
 }
 
 func failSkillUse(current Operation, state SkillUseState, err error) (Step, error) {

@@ -39,6 +39,8 @@ type PrimitiveDispatch struct {
 }
 
 type Step struct {
+	// Operation is the next durable checkpoint; nil leaves the checkpoint unchanged.
+	Operation  *Operation
 	Dispatches []PrimitiveDispatch
 }
 

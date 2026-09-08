@@ -34,6 +34,20 @@ type localRunningOperation struct {
 	cancel                context.CancelFunc
 	operation             Operation
 	remoteJobHandlerIndex int
+	handle                func(*primitives.PrimitiveEvent) (Step, error)
+}
+
+func (current *localRunningOperation) initialize() error {
+		shell, err := NewShell(current.operation)
+		if err != nil {
+			return err
+		}
+		current.handle = shell.Handle
+		current.handle = func(event *primitives.PrimitiveEvent) (Step, error) {
+			return advanceLocalOperation(current.operation, event)
+		}
+	}
+	return nil
 }
 
 var _ Manager = (*LocalOperationManager)(nil)
@@ -131,6 +145,12 @@ func (manager *LocalOperationManager) run() {
 				request.result <- nil
 				continue
 			}
+			if err := current.initialize(); err != nil {
+				cancel()
+				request.result <- err
+				continue
+			}
+			step, err := current.handle(nil)
 			if err != nil {
 				cancel()
 				request.result <- err
@@ -205,7 +225,10 @@ func (manager *LocalOperationManager) run() {
 				continue
 			}
 			if completed && current.ctx.Err() != nil {
+				event.Type = primitives.PrimitiveEventCanceled
+				event.Result = nil
 			}
+			step, err := current.handle(&event)
 			if err != nil {
 				manager.failLocalOperation(operations, current, err)
 				continue
@@ -227,10 +250,23 @@ func (manager *LocalOperationManager) acceptLocalStep(
 	current *localRunningOperation,
 	step Step,
 ) int {
+	if step.Operation != nil {
+		current.operation = *step.Operation
+		manager.appendLocalUpdate(*step.Operation)
+		if localOperationFinished(step.Operation.Status) {
+			current.cancel()
+			delete(operations, step.Operation.ID)
+			return 0
+		}
 	}
 	started := 0
 	for _, dispatch := range step.Dispatches {
 		if err := startLocalPrimitive(current.ctx, dispatch, manager.primitiveEvents); err != nil {
+			failed, advanceErr := current.handle(&primitives.PrimitiveEvent{
+				Type:   primitives.PrimitiveEventFailed,
+				Source: primitives.SourceID(current.operation.ID),
+				Result: primitives.PrimitiveFailureResult{Error: err.Error()},
+			})
 			if advanceErr != nil {
 				manager.failLocalOperation(operations, current, advanceErr)
 				return started
@@ -305,11 +341,15 @@ func failLocalOperation(current Operation, err error) Operation {
 		if stateErr == nil {
 			step, stepErr := failSkillUse(current, state, err)
 			if stepErr == nil {
+				return *step.Operation
 			}
 		}
 	case TypeShell:
+		shell, stateErr := NewShell(current)
 		if stateErr == nil {
+			step, stepErr := shell.fail(err)
 			if stepErr == nil {
+				return *step.Operation
 			}
 		}
 	case TypeRemoteJob:
@@ -317,6 +357,7 @@ func failLocalOperation(current Operation, err error) Operation {
 		if stateErr != nil {
 			panic(fmt.Errorf("fail validated remote job operation %q: %w", current.ID, stateErr))
 		}
+		return *step.Operation
 	}
 	current.Status = StatusFailed
 	return current

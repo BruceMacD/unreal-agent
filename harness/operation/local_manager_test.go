@@ -2,6 +2,7 @@ package operation_test
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -522,5 +523,59 @@ func waitForFileContents(t *testing.T, path string, want string) {
 		case <-t.Context().Done():
 			t.Fatal(t.Context().Err())
 		}
+	}
+}
+
+func TestShellCaptureUpdateVolumeScalesLinearly(t *testing.T) {
+	var previousBytes int64
+	var previousUpdates int
+		base := t.TempDir()
+		id := operation.ID("large-capture")
+		exitCode := 0
+		current := shellOperationWithState(t, id, operation.ShellState{
+			Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		manager := operation.NewLocalOperationManager(ctx)
+		if err := manager.Add(current); err != nil {
+			t.Fatal(err)
+		}
+		var serializedBytes int64
+		updates := 0
+		for {
+			var update operation.Operation
+			select {
+			case value, open := <-manager.Updates():
+				if !open {
+					t.Fatal("manager closed before the capture completed")
+				}
+				update = value
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			encoded, err := json.Marshal(update)
+			if err != nil {
+				t.Fatal(err)
+			}
+			serializedBytes += int64(len(encoded))
+			updates++
+				t.Fatalf("limit %d produced %d updates totaling %d bytes", limit, updates, serializedBytes)
+			}
+			if update.Status == operation.StatusFailed || update.Status == operation.StatusCanceled {
+				t.Fatalf("capture failed: %s", update.State)
+			}
+			if update.Status == operation.StatusCompleted {
+				state := shellState(t, update)
+				}
+				break
+			}
+		}
+		cancel()
+		t.Logf("limit %d: %d operation updates, %d serialized bytes", limit, updates, serializedBytes)
+		if previousBytes != 0 && (serializedBytes > 4*previousBytes+4096 || updates != previousUpdates) {
+			t.Fatalf("4x larger capture changed %d updates / %d bytes to %d updates / %d bytes", previousUpdates, previousBytes, updates, serializedBytes)
+		}
+		previousBytes, previousUpdates = serializedBytes, updates
 	}
 }

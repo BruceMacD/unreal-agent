@@ -72,6 +72,7 @@ func TestLocalOperationManagerRoutesRemoteJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handler.updates <- *completed.Operation
 	if update := receiveRemoteJobUpdate(t, manager.Updates()); update.Status != operation.StatusCompleted {
 		t.Fatalf("status = %q", update.Status)
 	}
@@ -216,6 +217,7 @@ func TestLocalOperationManagerIsolatesStoppedRemoteHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	second.updates <- *completed.Operation
 	if update := receiveRemoteJobUpdate(t, manager.Updates()); update.ID != secondJob.ID || update.Status != operation.StatusCompleted {
 		t.Fatalf("completed update = %#v", update)
 	}
@@ -239,6 +241,7 @@ func TestLocalOperationManagerRejectsUpdateFromWrongRemoteHandler(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	second.updates <- *awaiting.Operation
 
 	failed := receiveRemoteJobUpdate(t, manager.Updates())
 	failedState, err := operation.DecodeRemoteJobState(failed)
@@ -284,6 +287,7 @@ func TestLocalOperationManagerValidatesRemoteJobUpdateIdentity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				*update = *step.Operation
 			},
 		},
 	}
@@ -332,12 +336,15 @@ func TestLocalOperationManagerRejectsRemoteJobStatusRegression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handler.updates <- *awaiting.Operation
 	if update := receiveRemoteJobUpdate(t, manager.Updates()); update.Status != operation.StatusAwaiting {
 		t.Fatalf("status = %q", update.Status)
 	}
+	regressed, err := operation.UpdateRemoteJob(*awaiting.Operation, state, operation.StatusReady)
 	if err != nil {
 		t.Fatal(err)
 	}
+	handler.updates <- *regressed.Operation
 	failed := receiveRemoteJobUpdate(t, manager.Updates())
 	failedState, err := operation.DecodeRemoteJobState(failed)
 	if err != nil {

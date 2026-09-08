@@ -74,9 +74,11 @@ func TestNewRemoteJobSpecRoundTripsPlan(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			terminal, err := test.apply(*awaiting.Operation)
 			if err != nil {
 				t.Fatal(err)
 			}
+			state, err := operation.DecodeRemoteJobState(*terminal.Operation)
 			if err != nil {
 				t.Fatal(err)
 			}

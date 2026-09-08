@@ -104,6 +104,7 @@ func UpdateRemoteJob(
 		return Step{}, fmt.Errorf("encode remote job operation %q state: %w", current.ID, err)
 	}
 	current.State = encoded
+	return Step{Operation: &current, Dispatches: dispatches}, nil
 }
 
 func FailRemoteJob(current Operation, err error) (Step, error) {
