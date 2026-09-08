@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"uuid"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
@@ -74,6 +75,8 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 	return decodeResponse(responseBody)
 }
 
+const modelResponseIdleTimeout = 30 * time.Minute
+
 	correlationID := primitives.CorrelationID(uuid.New().String())
 	request := primitives.DefaultRemoteRequest(remoteSource, correlationID, adapter.endpoint)
 	request.Method = http.MethodPost
@@ -85,6 +88,7 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 		}
 		request.Headers[name] = values
 	}
+	request.ResponseIdleTimeout = modelResponseIdleTimeout
 	return request
 }
 

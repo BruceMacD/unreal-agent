@@ -488,3 +488,9 @@ func waitForSignal(t *testing.T, signal <-chan struct{}, failure string) {
 		t.Fatal(failure)
 	}
 }
+
+func TestAdapterModelRequestsUseTheModelIdleBound(t *testing.T) {
+	adapter := newTestAdapter(t, "http://example.invalid/responses").(*adapter)
+		t.Fatalf("remote request = %#v", request)
+	}
+}

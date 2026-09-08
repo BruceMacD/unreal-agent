@@ -344,3 +344,32 @@ func containsTool(tools []llm.Tool, name string) bool {
 	}
 	return false
 }
+
+func TestReasoningEffortMapsEveryThinkingLevel(t *testing.T) {
+	cases := map[string]llm.ReasoningEffort{
+		"low":    llm.ReasoningEffortLow,
+		"medium": llm.ReasoningEffortMedium,
+		"high":   llm.ReasoningEffortHigh,
+		"xhigh":  llm.ReasoningEffortXHigh,
+		"max":    llm.ReasoningEffortMax,
+		"":       llm.ReasoningEffortHigh,
+	}
+	for level, want := range cases {
+		if got := reasoningEffort(level); got != want {
+			t.Errorf("reasoningEffort(%q) = %q, want %q", level, got, want)
+		}
+	}
+	for _, level := range []string{"xhigh", "max"} {
+			t.Errorf("validateRequest(thinking_level=%q) = %v, want nil", level, err)
+		}
+	}
+}
+
+func TestResolveLogDirectoryDefaultsToWorkspaceLogs(t *testing.T) {
+	if got := resolveLogDirectory("/work", ""); got != filepath.Join("/work", "logs") {
+		t.Fatalf("resolveLogDirectory default = %q", got)
+	}
+	if got := resolveLogDirectory("/work", " /elsewhere "); got != "/elsewhere" {
+		t.Fatalf("resolveLogDirectory configured = %q", got)
+	}
+}

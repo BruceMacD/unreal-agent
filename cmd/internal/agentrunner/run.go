@@ -117,6 +117,7 @@ func Run(
 	flags.SetOutput(flagOutput)
 	sessionDirectory := flags.String("session-directory", defaultSessionDirectory, "directory containing session files")
 	workspaceDirectory := flags.String("workspace", ".", "agent workspace and Bash working directory")
+	logDirectory := flags.String("log-directory", "", "session JSONL log directory; defaults to <workspace>/logs")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -195,6 +196,7 @@ func Run(
 	if err != nil {
 		return err
 	}
+	logFile, err := openDatetimeLog(resolveLogDirectory(workspace, *logDirectory), time.Now())
 	if err != nil {
 		return err
 	}
@@ -298,6 +300,15 @@ func selectProvider(providers []Provider, name string) (Provider, error) {
 	}
 }
 
+func resolveLogDirectory(workspace, configured string) string {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return filepath.Join(workspace, "logs")
+	}
+	return configured
+}
+
+func openDatetimeLog(directory string, now time.Time) (*os.File, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
@@ -387,7 +398,9 @@ func (scope *environmentScope) Close() error {
 	}
 	if parsed.ThinkingLevel != "" {
 		switch parsed.ThinkingLevel {
+		case "low", "medium", "high", "xhigh", "max":
 		default:
+			return nil, errors.New("thinking_level must be one of: low, medium, high, xhigh, max")
 		}
 	}
 	for _, name := range append(parsed.ExtraAllowedTools, parsed.DisallowedTools...) {
@@ -426,6 +439,10 @@ func reasoningEffort(level string) llm.ReasoningEffort {
 		return llm.ReasoningEffortLow
 	case "medium":
 		return llm.ReasoningEffortMedium
+	case "xhigh":
+		return llm.ReasoningEffortXHigh
+	case "max":
+		return llm.ReasoningEffortMax
 	default:
 		return llm.ReasoningEffortHigh
 	}

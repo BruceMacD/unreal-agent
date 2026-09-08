@@ -201,3 +201,22 @@ func TestRequestBodyRejectsUnsupportedToolType(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestRequestBodyEncodesMaxReasoningEffort(t *testing.T) {
+	body, err := requestBody(llm.Request{
+		Model: llm.Model{ID: "gpt-test", ReasoningEffort: llm.ReasoningEffortMax},
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Reasoning struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Reasoning.Effort != "max" {
+		t.Fatalf("reasoning = %#v", request.Reasoning)
+	}
+}
