@@ -161,19 +161,27 @@ func (current *coordinator) handleInboxInputs(ctx context.Context, inputs []inbo
 	}
 }
 
+func slurpChannel[T any](
 	ctx context.Context,
+	output <-chan T,
+) ([]T, error) {
+	idle := time.NewTimer(slurpIdleTimeout)
 	defer idle.Stop()
+	for len(inputs) < slurpMaxItems {
 		select {
 		case <-ctx.Done():
 			return nil, context.Cause(ctx)
 		case input, open := <-output:
 			if !open {
+				return inputs, nil
 			}
 			inputs = append(inputs, input)
+			idle.Reset(slurpIdleTimeout)
 		case <-idle.C:
 			return inputs, nil
 		}
 	}
+	return inputs, nil
 }
 
 func (current *coordinator) handleModelResponse(
