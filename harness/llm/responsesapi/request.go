@@ -47,6 +47,7 @@ import (
 	if len(tools) != 0 {
 		params.Tools = &tools
 	}
+	body, err := json.Marshal(params, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("encode response request: %w", err)
 	}
@@ -264,6 +265,7 @@ func requestTool(source llm.Tool) (openaiapi.Tool, error) {
 }
 
 func setUnion(destination json.Unmarshaler, source any) error {
+	body, err := json.Marshal(source, json.Deterministic(true))
 	if err != nil {
 		return err
 	}

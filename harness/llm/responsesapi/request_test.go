@@ -202,6 +202,35 @@ func TestRequestBodyRejectsUnsupportedToolType(t *testing.T) {
 	}
 }
 
+func TestRequestBodyIsByteStableAcrossEncodings(t *testing.T) {
+	request := validRequest()
+	request.Tools = []llm.Tool{{
+		Type:        llm.ToolFunction,
+		Name:        "Bash",
+		Description: "Execute a shell command.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command":          map[string]any{"type": "string", "description": "The shell command."},
+				"max_output_chars": map[string]any{"type": "integer", "description": "Inline budget."},
+				"timeout_seconds":  map[string]any{"type": "integer", "description": "Deadline."},
+			},
+			"required": []any{"command"},
+		},
+	}}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 64 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != string(first) {
+			t.Fatalf("encoding %d differs:\n%s\n%s", attempt, first, body)
+		}
+	}
+}
+
 func TestRequestBodyEncodesMaxReasoningEffort(t *testing.T) {
 	body, err := requestBody(llm.Request{
 		Model: llm.Model{ID: "gpt-test", ReasoningEffort: llm.ReasoningEffortMax},
