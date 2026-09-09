@@ -31,6 +31,9 @@ const (
 )
 
 type ShellInput struct {
+	Command   string
+	Shell     string
+	Directory string
 }
 
 type ShellResult struct {

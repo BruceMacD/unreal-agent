@@ -1024,20 +1024,57 @@ func TestProcessUsesDirectoryAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestProcessEnvironmentInheritance(t *testing.T) {
+	t.Setenv("HARNESS_TEST_PROCESS_VALUE", "inherited")
+	t.Setenv("HARNESS_TEST_PROCESS_PARENT_ONLY", "parent")
 	for _, test := range []struct {
 		name        string
 		environment []string
+		want        string
 	}{
+		{name: "nil inherits", want: "inherited:parent"},
+		{name: "empty", environment: []string{}, want: ":"},
+		{name: "explicit replaces", environment: []string{"HARNESS_TEST_PROCESS_VALUE=explicit"}, want: "explicit:"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			events := collectEvents(startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
 				Source:        "operation-1",
 				CorrelationID: "process-1",
+				Path:          "/bin/sh",
+				Arguments:     []string{"-c", `printf '%s:%s' "$HARNESS_TEST_PROCESS_VALUE" "$HARNESS_TEST_PROCESS_PARENT_ONLY"`},
 				Environment:   test.environment,
 			}).Events())
+			if len(events) != 3 || events[0].Type != primitives.PrimitiveEventProcessStarted ||
+				events[1].Type != primitives.PrimitiveEventProcessOutput ||
+				events[2].Type != primitives.PrimitiveEventProcessExited {
 				t.Fatalf("events = %#v", events)
 			}
+			output := eventResult[primitives.ProcessOutputResult](t, events[1])
+			if string(output.Data) != test.want {
+				t.Fatalf("output = %q, want %q", output.Data, test.want)
+			}
+			exit := eventResult[primitives.ProcessExitResult](t, events[2])
+			if exit.ExitCode != 0 || exit.Signal != 0 {
+				t.Fatalf("exit = %#v", exit)
+			}
 		})
+	}
+}
+
+func TestProcessUsesExplicitEmptyEnvironment(t *testing.T) {
+	events := collectEvents(startProcessWithAllPipes(t.Context(), primitives.ProcessStartRequest{
+		Source:        "operation-1",
+		CorrelationID: "process-1",
+		Path:          "/usr/bin/env",
+		Environment:   []string{},
+	}).Events())
+	if len(events) != 2 || events[0].Type != primitives.PrimitiveEventProcessStarted ||
+		events[1].Type != primitives.PrimitiveEventProcessExited {
+		t.Fatalf("events = %#v", events)
+	}
+	exit := eventResult[primitives.ProcessExitResult](t, events[1])
+	if exit.ExitCode != 0 || exit.Signal != 0 {
+		t.Fatalf("exit = %#v", exit)
 	}
 }
 

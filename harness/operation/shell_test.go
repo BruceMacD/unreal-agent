@@ -23,6 +23,8 @@ func TestShellActorCapturesArtifactsAndCompletes(t *testing.T) {
 	workingDirectory := t.TempDir()
 	stdout := strings.Repeat("stdout-", 8*1024)
 	stderr := strings.Repeat("stderr-", 7*1024)
+	t.Setenv("SHELL_STDOUT", stdout)
+	t.Setenv("SHELL_STDERR", stderr)
 	current := newShellOperation(t, "shell-complete", operation.ShellInput{
 		Shell:     testShellPath,
 		Command:   "printf '%s' \"$SHELL_STDOUT\"; printf '%s' \"$SHELL_STDERR\" >&2; exit 7",
@@ -58,6 +60,9 @@ func TestShellSpecRejectsZeroInlineLength(t *testing.T) {
 func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 	baseDirectory := t.TempDir()
 	current := newShellOperation(t, "shell-request", operation.ShellInput{
+		Shell:     "/bin/zsh",
+		Command:   "printf direct",
+		Directory: "/tmp",
 	}, baseDirectory, 10)
 
 	step, err := advanceShellOnce(t, current, nil)
@@ -94,6 +99,7 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 	if request.Path != "/bin/zsh" ||
 		!slices.Equal(request.Arguments, []string{"-c", "printf direct"}) ||
 		request.Directory != "/tmp" ||
+		request.Environment != nil ||
 		request.Pipes != 0 ||
 		request.StdoutPath != filepath.Join(directory, operation.ShellOutFilename) ||
 		request.StderrPath != filepath.Join(directory, operation.ShellErrFilename) {

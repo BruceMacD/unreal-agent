@@ -16,7 +16,11 @@ import (
 
 func TestLocalOperationManagerRunsShellOperation(t *testing.T) {
 	manager := operation.NewLocalOperationManager(t.Context())
+	t.Setenv("VALUE", "output")
 	current := newShellOperation(t, "local-shell", operation.ShellInput{
+		Shell:     testShellPath,
+		Command:   `printf '%s' "$VALUE"; printf error >&2; exit 7`,
+		Directory: t.TempDir(),
 	}, t.TempDir(), 64)
 
 	if err := manager.Add(current); err != nil {
@@ -77,7 +81,10 @@ func TestLocalOperationManagerQueuesUpdatesWhileUnread(t *testing.T) {
 	manager := operation.NewLocalOperationManager(ctx)
 	baseDirectory := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "ran")
+	t.Setenv("MARKER", marker)
 	current := newShellOperation(t, "local-queued-updates", operation.ShellInput{
+		Shell:   testShellPath,
+		Command: `printf output; printf done > "$MARKER"`,
 	}, baseDirectory, 64)
 
 	if err := manager.Add(current); err != nil {

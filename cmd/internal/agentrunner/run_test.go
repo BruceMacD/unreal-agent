@@ -192,6 +192,7 @@ func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 }
 
 func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
+	t.Setenv(llmAPIKeyEnvironment, "secret")
 	for _, test := range []struct {
 		name, arguments, want string
 		truncated             bool
@@ -254,12 +255,16 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 					}
 					return ""
 				},
+				func() []string { return []string{"PATH=/usr/bin:/bin", "UNREAL_HARNESS_LLM_API_KEY=secret"} },
 				strings.NewReader(`{"messages":[{"role":"user","content":"run it"}],"model":"gpt-test"}`),
 				&stdout,
 				&stderr,
 			)
 			if code != 0 {
 				t.Fatalf("exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
+			}
+			if strings.Contains(stdout.String(), "PATH=") || strings.Contains(stdout.String(), "secret") {
+				t.Fatal("persisted session items contain the process environment")
 			}
 		})
 	}

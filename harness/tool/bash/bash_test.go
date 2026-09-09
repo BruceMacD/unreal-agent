@@ -50,6 +50,9 @@ func TestTranslatorSubmitsShellOperation(t *testing.T) {
 		t.Fatalf("decode shell state: %v", err)
 	}
 	wantInput := operation.ShellInput{
+		Command:   `  printf '%s' "$HOME"; exit 7  `,
+		Shell:     config.Shell,
+		Directory: config.Directory,
 	}
 	if !reflect.DeepEqual(state.Input, wantInput) {
 		t.Fatalf("shell input = %#v, want %#v", state.Input, wantInput)

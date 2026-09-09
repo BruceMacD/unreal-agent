@@ -97,6 +97,9 @@ func validateArguments(encoded string) (string, int, error) {
 
 func (translator *translator) buildOperation(command string, limit int) (operation.Spec, error) {
 	spec, err := operation.NewShellSpec(operation.ShellInput{
+		Command:   command,
+		Shell:     translator.config.Shell,
+		Directory: translator.config.Directory,
 	}, translator.config.BaseDirectory, limit)
 	if err != nil {
 		return operation.Spec{}, fmt.Errorf("build Bash operation: %w", err)

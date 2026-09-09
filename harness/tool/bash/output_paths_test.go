@@ -113,6 +113,8 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 			if err := os.Mkdir(base, 0o700); err != nil {
 				t.Fatal(err)
 			}
+			t.Setenv("OUT", test.stdout)
+			t.Setenv("ERR", test.stderr)
 			translator := bash.New(bash.Config{
 				Shell: "/bin/sh", BaseDirectory: base,
 			})
