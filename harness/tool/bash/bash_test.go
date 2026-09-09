@@ -254,6 +254,11 @@ func TestTranslatorRejectsInvalidArguments(t *testing.T) {
 		{name: "uppercase command", arguments: `{"COMMAND":"pwd"}`, want: `bash argument "command" must be set`},
 		{name: "null command", arguments: `{"command":null}`, want: `bash argument "command" must be a string`},
 		{name: "non-string command", arguments: `{"command":42}`, want: `decode Bash argument "command": json:`},
+		{name: "NUL at start", arguments: `{"command":"\u0000pwd"}`, want: `bash argument "command" contains a NUL byte at offset 0`},
+		{name: "NUL at end", arguments: `{"command":"pwd\u0000"}`, want: `bash argument "command" contains a NUL byte at offset 3`},
+		{name: "first of multiple NULs", arguments: `{"command":"a\u0000b\u0000"}`, want: `bash argument "command" contains a NUL byte at offset 1`},
+		{name: "NUL after multibyte text", arguments: `{"command":"é雪\u0000"}`, want: `bash argument "command" contains a NUL byte at offset 5`},
+		{name: "NUL in heredoc", arguments: `{"command":"cat <<'EOF'\ncaf\u0000e9\nEOF\n"}`, want: `bash argument "command" contains a NUL byte at offset 15`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -264,6 +269,34 @@ func TestTranslatorRejectsInvalidArguments(t *testing.T) {
 			}
 			if len(status.WaitingFor) != 0 || len(ctx.specs) != 0 {
 				t.Fatalf("status = %#v, submitted specs = %d", status, len(ctx.specs))
+			}
+		})
+	}
+}
+
+func TestTranslatorPreservesEscapedNULCommands(t *testing.T) {
+	translator := bash.New(bash.Config{Shell: "/bin/bash", BaseDirectory: "/operations"})
+	for _, command := range []string{
+		"cat <<'EOF'\ncaf\\x00e9\nEOF\n",
+		`printf 'a\000b'`,
+		`printf '%s' '\u0000'`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			arguments, err := json.Marshal(map[string]string{"command": command})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := &recordingContext{}
+			status := translator.Translate(ctx, llm.ToolCall{Arguments: string(arguments)})
+			if status.Error != "" || len(status.WaitingFor) != 1 || len(ctx.specs) != 1 {
+				t.Fatalf("status = %#v, submitted specs = %d", status, len(ctx.specs))
+			}
+			var state operation.ShellState
+			if err := json.Unmarshal(ctx.specs[0].State, &state); err != nil {
+				t.Fatal(err)
+			}
+			if state.Input.Command != command {
+				t.Fatalf("command = %q, want %q", state.Input.Command, command)
 			}
 		})
 	}

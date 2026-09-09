@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
@@ -91,6 +92,9 @@ func validateArguments(encoded string) (string, int, error) {
 	}
 	if command == nil {
 		return "", limit, errors.New(`bash argument "command" must be a string`)
+	}
+	if offset := strings.IndexByte(*command, 0); offset >= 0 {
+		return "", limit, fmt.Errorf(`bash argument "command" contains a NUL byte at offset %d`, offset)
 	}
 	return *command, limit, nil
 }
