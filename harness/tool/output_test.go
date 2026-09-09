@@ -36,6 +36,7 @@ func TestOutputLengthMaximumMatchesToolSchemas(t *testing.T) {
 
 func TestValidationErrorsAreBoundedBeforeResultTranslation(t *testing.T) {
 	bashCall := bash.New(bash.Config{Shell: "/bin/sh", BaseDirectory: "/operations"})
+	longName := strings.Repeat("é", operation.DefaultMaxOutputLength+1)
 	malformed := fmt.Sprintf(`{%q:0,%q:0}`, longName, longName)
 	for _, test := range []struct {
 		name       string

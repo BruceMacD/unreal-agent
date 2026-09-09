@@ -68,6 +68,7 @@ func TestShellPreparesOutputBeforePublishingCompletion(t *testing.T) {
 		want      string
 		truncated bool
 	}{
+		{"above default", []byte(strings.Repeat("é", 50000)), 100000, 50000, strings.Repeat("é", 50000), false},
 		{"invalid UTF8", []byte{'a', 0xff, 'b'}, 3, 3, "a�b", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

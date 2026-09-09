@@ -6,6 +6,7 @@ import (
 )
 
 const (
+	DefaultMaxOutputLength = 40_000
 	MaxOutputLength        = 1_000_000
 )
 

@@ -105,8 +105,12 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 		stdout, stderr string
 		limit          int
 	}{
+		{name: "default character limit", stdout: strings.Repeat("界", 40001), stderr: strings.Repeat("e", 40001)},
+		{name: "source read within default", stdout: strings.Repeat("界", 25000)},
+		{name: "default boundary", stdout: strings.Repeat("x", 40000)},
 		{name: "complete output", stdout: "ok"},
 		{name: "requested limit", stdout: "界界界界", stderr: "éééé", limit: 3},
+		{name: "requested limit below default", stdout: strings.Repeat("界", 5000), limit: 5000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			base := filepath.Join(t.TempDir(), "captures with spaces")
