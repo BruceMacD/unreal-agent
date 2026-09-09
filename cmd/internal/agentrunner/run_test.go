@@ -341,6 +341,7 @@ type fakeClient struct {
 	closed  bool
 }
 
+func (client *fakeClient) Respond(ctx context.Context, request llm.Request, _ llm.RequestOptions) (llm.Response, error) {
 	return client.respond(ctx, request)
 }
 

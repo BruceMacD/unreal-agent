@@ -37,6 +37,8 @@ func NewClient(config Config) (*Client, error) {
 			"Authorization": {"Bearer " + config.APIKey},
 			"Content-Type":  {"application/json"},
 		},
+		Trace:             config.Trace,
+		CacheKeyPlacement: responsesapi.CacheKeyPlacement{UsePromptCacheKeyField: true},
 	})
 	if err != nil {
 		_ = remote.Close()

@@ -2,6 +2,7 @@ package responsesapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -40,11 +41,24 @@ type Exchange struct {
 	ResponseBody []byte
 }
 
+type CacheKeyPlacement struct {
+	Header                 string
+	UsePromptCacheKeyField bool
+}
+
 type Config struct {
+	Endpoint          string
+	Headers           map[string][]string
+	CacheKeyPlacement CacheKeyPlacement
 	Trace func(Exchange)
 }
 
 type adapter struct {
+	remote            *primitives.RemoteClient
+	endpoint          string
+	headers           map[string][]string
+	trace             func(Exchange)
+	cacheKeyPlacement CacheKeyPlacement
 }
 
 var _ llm.Adapter = (*adapter)(nil)
@@ -57,12 +71,27 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 		return nil, errors.New("responses API endpoint must be set")
 	}
 	return &adapter{
+		remote:            remote,
+		endpoint:          config.Endpoint,
+		headers:           config.Headers,
+		trace:             config.Trace,
+		cacheKeyPlacement: config.CacheKeyPlacement,
 	}, nil
 }
 
+func (adapter *adapter) Respond(ctx context.Context, request llm.Request, options llm.RequestOptions) (llm.Response, error) {
+	key := ""
+	if options.CacheKey != "" {
+		key = fmt.Sprintf("%x", sha256.Sum256([]byte(options.CacheKey)))
+	}
+	promptCacheKey := ""
+	if adapter.cacheKeyPlacement.UsePromptCacheKeyField {
+		promptCacheKey = key
+	}
 	if err != nil {
 		return llm.Response{}, err
 	}
+	statusCode, responseBody, err := adapter.exchange(ctx, body, key)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -77,6 +106,7 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 
 const modelResponseIdleTimeout = 30 * time.Minute
 
+func (adapter *adapter) remoteRequest(body []byte, cacheKey string) primitives.RemoteRequest {
 	correlationID := primitives.CorrelationID(uuid.New().String())
 	request := primitives.DefaultRemoteRequest(remoteSource, correlationID, adapter.endpoint)
 	request.Method = http.MethodPost
@@ -87,6 +117,9 @@ const modelResponseIdleTimeout = 30 * time.Minute
 			continue
 		}
 		request.Headers[name] = values
+	}
+	if adapter.cacheKeyPlacement.Header != "" && cacheKey != "" {
+		request.Headers[adapter.cacheKeyPlacement.Header] = []string{cacheKey}
 	}
 	request.ResponseIdleTimeout = modelResponseIdleTimeout
 	return request

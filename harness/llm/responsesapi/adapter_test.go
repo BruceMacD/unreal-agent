@@ -20,6 +20,8 @@ import (
 
 func TestAdapterRemoteRequestsUseUUIDCorrelationIDs(t *testing.T) {
 	adapter := &adapter{endpoint: "https://example.com/responses"}
+	first := adapter.remoteRequest(nil, "").CorrelationID
+	second := adapter.remoteRequest(nil, "").CorrelationID
 
 	if _, err := uuid.Parse(string(first)); err != nil {
 		t.Fatalf("first correlation ID = %q: %v", first, err)
@@ -55,6 +57,7 @@ func TestAdapterResponds(t *testing.T) {
 	defer server.Close()
 
 	adapter := newTestAdapter(t, server.URL+"/responses")
+	got, err := adapter.Respond(t.Context(), detailedRequest(), llm.RequestOptions{})
 	if err != nil {
 		t.Fatalf("respond: %v", err)
 	}
@@ -112,6 +115,7 @@ func TestAdapterReturnsProviderErrors(t *testing.T) {
 	defer server.Close()
 
 	adapter := newTestAdapter(t, server.URL+"/responses")
+	_, err := adapter.Respond(t.Context(), llm.Request{}, llm.RequestOptions{})
 	var apiError *APIError
 	if !errors.As(err, &apiError) {
 		t.Fatalf("error = %#v", err)
@@ -139,6 +143,7 @@ func TestRespondCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
+		_, err := adapter.Respond(ctx, validRequest(), llm.RequestOptions{})
 		done <- err
 	}()
 	waitForSignal(t, started, "provider request did not start")
@@ -303,6 +308,7 @@ func TestAdapterTracesProviderExchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create adapter: %v", err)
 	}
+	if _, err := adapter.Respond(t.Context(), validRequest(), llm.RequestOptions{}); err != nil {
 		t.Fatalf("respond: %v", err)
 	}
 
@@ -491,6 +497,100 @@ func waitForSignal(t *testing.T, signal <-chan struct{}, failure string) {
 
 func TestAdapterModelRequestsUseTheModelIdleBound(t *testing.T) {
 	adapter := newTestAdapter(t, "http://example.invalid/responses").(*adapter)
+	request := adapter.remoteRequest(nil, "")
 		t.Fatalf("remote request = %#v", request)
+	}
+}
+
+func TestAdapterCacheKeyPlacement(t *testing.T) {
+	keys := map[string]struct{ key, want string }{
+		"empty":             {},
+		"session":           {key: "session-1", want: "84097828fc31a8c8d29210df48901a85de7fd013f686b17be77d1be29cb7a98b"},
+		"another-session":   {key: "session-2", want: "5d9061408048c12d053925aed45333a142997f26a2cd1e0c4a87678c53a1e3ae"},
+		"long":              {key: strings.Repeat("s", 300), want: "2955c7328c57ca39d0568bb930a5360e6b0e7f33931639c819d7cbfeaf0a88c7"},
+		"long-distinct":     {key: strings.Repeat("s", 300) + "t", want: "39a446f53f3a89913a4cc295c285287870053e373201678b6a6401e7bbb5dfef"},
+		"unicode":           {key: "会話", want: "098eb2e3728cd354d91d5ff240891cbb20e225247cda47eeb8d49686fe7bd248"},
+		"header-characters": {key: "key\r\nwith\tcontrols", want: "45ffa7b66165175c09a7c0c0396d13359f51bdd60a348c910da142212717fb04"},
+	}
+	for name, config := range map[string]CacheKeyPlacement{
+		"disabled": {},
+		"body":     {UsePromptCacheKeyField: true},
+		"header":   {Header: "x-cache-affinity"},
+		"both":     {Header: "x-cache-affinity", UsePromptCacheKeyField: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				var body struct {
+					Input []struct {
+						Content string `json:"content"`
+					} `json:"input"`
+					PromptCacheKey *string `json:"prompt_cache_key"`
+				}
+				if err := json.UnmarshalRead(request.Body, &body); err != nil {
+					t.Errorf("decode request: %v", err)
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if len(body.Input) != 1 {
+					t.Errorf("input = %#v", body.Input)
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				caseName := body.Input[0].Content
+				key, ok := keys[caseName]
+				if !ok {
+					t.Errorf("unexpected input = %q", caseName)
+				}
+				wantBody, wantHeader := "", ""
+				if config.UsePromptCacheKeyField {
+					wantBody = key.want
+				}
+				if config.Header != "" {
+					wantHeader = key.want
+				}
+				if wantBody == "" {
+					if body.PromptCacheKey != nil {
+						t.Errorf("%s: unexpected prompt_cache_key = %q", caseName, *body.PromptCacheKey)
+					}
+				} else if body.PromptCacheKey == nil || *body.PromptCacheKey != wantBody {
+					t.Errorf("%s: prompt_cache_key = %v, want %q", caseName, body.PromptCacheKey, wantBody)
+				}
+				if got := request.Header.Get("x-cache-affinity"); got != wantHeader {
+					t.Errorf("%s: affinity header = %q, want %q", caseName, got, wantHeader)
+				}
+				if got := request.Header.Get("X-Test"); got != "kept" {
+					t.Errorf("%s: X-Test = %q, want kept", caseName, got)
+				}
+			}))
+			t.Cleanup(server.Close)
+			remote := primitives.NewRemoteClient()
+			t.Cleanup(func() {
+				if err := remote.Close(); err != nil {
+					t.Errorf("close remote client: %v", err)
+				}
+			})
+			headers := map[string][]string{"X-Test": {"kept"}}
+			adapter, err := NewAdapter(remote, Config{Endpoint: server.URL, Headers: headers, CacheKeyPlacement: config})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if len(headers) != 1 || !reflect.DeepEqual(headers["X-Test"], []string{"kept"}) {
+					t.Errorf("configured headers mutated: %#v", headers)
+				}
+			})
+			for name, key := range keys {
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					request := validRequest()
+					request.Input = []llm.Item{{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: name}}}
+					for range 2 {
+						if _, err := adapter.Respond(t.Context(), request, llm.RequestOptions{CacheKey: key.key}); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
+			}
+		})
 	}
 }

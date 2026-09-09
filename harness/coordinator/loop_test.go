@@ -1093,6 +1093,10 @@ func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) 
 			store.appendedStatuses,
 		)
 	}
+	options := adapter.requestOptionsSnapshot()
+	if len(options) != 2 || options[0].CacheKey != "session-1" || options[1].CacheKey != "session-1" {
+		t.Fatalf("request options = %#v, want session-1 cache keys for both turns", options)
+	}
 		t.Fatalf("continuation request = %#v", continuationRequest)
 	}
 	if len(adapter.requestSnapshot()) != 2 || len(store.appendedTurns) != 2 {
@@ -2496,20 +2500,32 @@ func (manager *fakeOperationManager) Updates() <-chan operation.Operation {
 }
 
 type fakeAdapter struct {
+	mutex          sync.Mutex
+	requests       []llm.Request
+	requestOptions []llm.RequestOptions
+	respond        func(context.Context, llm.Request) (llm.Response, error)
 }
 
 func (adapter *fakeAdapter) Respond(
 	ctx context.Context,
 	request llm.Request,
+	options llm.RequestOptions,
 ) (llm.Response, error) {
 	adapter.mutex.Lock()
 	adapter.requests = append(adapter.requests, request)
+	adapter.requestOptions = append(adapter.requestOptions, options)
 	respond := adapter.respond
 	adapter.mutex.Unlock()
 	if respond != nil {
 		return respond(ctx, request)
 	}
 	return llm.Response{}, errors.New("unexpected respond")
+}
+
+func (adapter *fakeAdapter) requestOptionsSnapshot() []llm.RequestOptions {
+	adapter.mutex.Lock()
+	defer adapter.mutex.Unlock()
+	return append([]llm.RequestOptions(nil), adapter.requestOptions...)
 }
 
 func (adapter *fakeAdapter) requestSnapshot() []llm.Request {

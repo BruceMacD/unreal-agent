@@ -130,6 +130,9 @@ func (current *coordinator) requestModelResponse(
 
 	requestContext, cancel := context.WithCancel(ctx)
 	go func() {
+		response, err := current.dependencies.LLM.Respond(requestContext, built.Request, llm.RequestOptions{
+			CacheKey: string(current.dependencies.SessionID),
+		})
 		select {
 		case results <- modelResponseResult{
 			turnID:   turn.ID,

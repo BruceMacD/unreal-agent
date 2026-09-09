@@ -30,6 +30,9 @@ import (
 		Include: &include,
 		Input:   &input,
 	}
+	if promptCacheKey != "" {
+		params.PromptCacheKey = &promptCacheKey
+	}
 	if request.Model.MaxOutputTokens != nil {
 		maxOutputTokens := int(*request.Model.MaxOutputTokens)
 		params.MaxOutputTokens = &maxOutputTokens

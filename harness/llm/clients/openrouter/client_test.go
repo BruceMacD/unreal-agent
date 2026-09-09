@@ -24,6 +24,7 @@ func TestNewClientRequiresBaseURL(t *testing.T) {
 }
 
 func TestClientCallsResponsesAPI(t *testing.T) {
+	const cacheKey = "84097828fc31a8c8d29210df48901a85de7fd013f686b17be77d1be29cb7a98b"
 	requestSeen := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/responses" {
@@ -35,11 +36,17 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 			t.Errorf("accept = %q", accept)
 		}
 		var body struct {
+			PromptCacheKey *string `json:"prompt_cache_key"`
+			Model          string  `json:"model"`
+			Stream         *bool   `json:"stream"`
 		}
 		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 			t.Errorf("body = %#v", body)
+		}
+		if got := request.Header.Get("x-session-id"); got != cacheKey || body.PromptCacheKey != nil {
+			t.Errorf("cache placement: header = %q, body = %v", got, body.PromptCacheKey)
 		}
 		requestSeen <- struct{}{}
 	}))
@@ -61,6 +68,7 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 			Data: llm.Message{Role: llm.RoleUser, Text: "hello"},
 		}},
 	}
+	response, err := client.Respond(t.Context(), request, llm.RequestOptions{CacheKey: "session-1"})
 	if err != nil {
 		t.Fatalf("respond: %v", err)
 	}

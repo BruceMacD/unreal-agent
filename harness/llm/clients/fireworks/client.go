@@ -40,6 +40,8 @@ func NewClient(config Config) (*Client, error) {
 			"Authorization": {"Bearer " + config.APIKey},
 			"Content-Type":  {"application/json"},
 		},
+		Trace:             config.Trace,
+		CacheKeyPlacement: responsesapi.CacheKeyPlacement{Header: "x-session-affinity"},
 	})
 	if err != nil {
 		_ = remote.Close()
@@ -48,6 +50,8 @@ func NewClient(config Config) (*Client, error) {
 	return &Client{Adapter: adapter, remote: remote}, nil
 }
 
+func (client *Client) Respond(ctx context.Context, request llm.Request, options llm.RequestOptions) (llm.Response, error) {
+	response, err := client.Adapter.Respond(ctx, request, options)
 	if err != nil {
 		return llm.Response{}, err
 	}
