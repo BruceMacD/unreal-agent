@@ -68,6 +68,7 @@ func TestLocalOperationManagerRoutesRemoteJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.TerminalResult = `{"content":[]}`
 	completed, err := operation.UpdateRemoteJob(current, state, operation.StatusCompleted)
 	if err != nil {
 		t.Fatal(err)
@@ -213,6 +214,7 @@ func TestLocalOperationManagerIsolatesStoppedRemoteHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.TerminalResult = `{}`
 	completed, err := operation.UpdateRemoteJob(secondJob, state, operation.StatusCompleted)
 	if err != nil {
 		t.Fatal(err)
@@ -264,6 +266,10 @@ func TestLocalOperationManagerValidatesRemoteJobUpdateIdentity(t *testing.T) {
 		want   string
 	}{
 		{
+			name: "output limit", want: "changed output limit",
+			mutate: func(update *operation.Operation) { update.MaxOutputLength++ },
+		},
+		{
 			name: "type", want: "type or version",
 			mutate: func(update *operation.Operation) { update.Type = operation.TypeShell },
 		},
@@ -310,6 +316,7 @@ func TestLocalOperationManagerValidatesRemoteJobUpdateIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if failed.Status != operation.StatusFailed || failed.MaxOutputLength != current.MaxOutputLength ||
 				!strings.Contains(state.TerminalError, test.want) {
 				t.Fatalf("operation = %#v, state = %#v", failed, state)
 			}
@@ -431,6 +438,7 @@ func newTestRemoteJobOperationForPlan(
 		t.Fatal(err)
 	}
 	return operation.Operation{
+		ID: id, Type: spec.Type, Version: spec.Version, Status: operation.StatusReady, MaxOutputLength: spec.MaxOutputLength, State: spec.State,
 	}
 }
 

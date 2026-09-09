@@ -10,6 +10,7 @@ import (
 
 const (
 	TypeRemoteJob    Type    = "remote_job"
+	VersionRemoteJob Version = 2
 )
 
 type RemoteJobPlanType string
@@ -36,7 +37,12 @@ type RemoteJobState struct {
 	NextInspectionAt time.Time      `json:",omitzero"`
 	OutstandingInput jsontext.Value `json:",omitzero"`
 	Subscription     jsontext.Value `json:",omitzero"`
+	TerminalResult   string         `json:",omitzero"`
 	TerminalError    string         `json:",omitzero"`
+	ResultBytes      int            `json:",omitzero"`
+	ResultTruncated  bool           `json:",omitzero"`
+	ErrorBytes       int            `json:",omitzero"`
+	ErrorTruncated   bool           `json:",omitzero"`
 }
 
 func NewRemoteJobSpec(plan RemoteJobPlan) (Spec, error) {
@@ -48,6 +54,10 @@ func NewRemoteJobSpec(plan RemoteJobPlan) (Spec, error) {
 		return Spec{}, fmt.Errorf("encode remote job operation state: %w", err)
 	}
 	return Spec{
+		MaxOutputLength: DefaultMaxOutputLength,
+		Type:            TypeRemoteJob,
+		Version:         VersionRemoteJob,
+		State:           encoded,
 	}, nil
 }
 
@@ -67,6 +77,13 @@ func DecodeRemoteJobState(current Operation) (RemoteJobState, error) {
 			current.Version,
 			ErrUnsupported,
 		)
+	}
+
+	if current.MaxOutputLength <= 0 {
+		return RemoteJobState{}, errors.New("max output length must be positive")
+	}
+	if current.MaxOutputLength > MaxOutputLength {
+		return RemoteJobState{}, fmt.Errorf("max output length must not exceed %d", MaxOutputLength)
 	}
 
 	var state RemoteJobState
@@ -99,6 +116,8 @@ func UpdateRemoteJob(
 	if err := validateRemoteJobPlan(state.Plan); err != nil {
 		return Step{}, fmt.Errorf("validate remote job operation %q state: %w", current.ID, err)
 	}
+	current.Status = status
+	prepareRemoteJobOutput(current, &state)
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return Step{}, fmt.Errorf("encode remote job operation %q state: %w", current.ID, err)
@@ -116,6 +135,8 @@ func FailRemoteJob(current Operation, err error) (Step, error) {
 		return Step{}, stateErr
 	}
 	state.TerminalError = err.Error()
+	state.ErrorBytes, state.ErrorTruncated = 0, false
+	state.TerminalResult = ""
 	state.Subscription = nil
 	return UpdateRemoteJob(current, state, StatusFailed)
 }
@@ -125,6 +146,7 @@ func CancelRemoteJob(current Operation) (Step, error) {
 	if err != nil {
 		return Step{}, err
 	}
+	state.TerminalResult = ""
 	state.Subscription = nil
 	return UpdateRemoteJob(current, state, StatusCanceled)
 }

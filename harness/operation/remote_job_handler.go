@@ -96,6 +96,9 @@ func (router *remoteJobHandlers) forward(ctx context.Context, index int, handler
 }
 
 func validateRemoteJobUpdate(current Operation, updated Operation) error {
+	if updated.MaxOutputLength != current.MaxOutputLength {
+		return fmt.Errorf("remote job handler changed output limit for operation %q", current.ID)
+	}
 	if updated.Type != current.Type || updated.Version != current.Version {
 		return fmt.Errorf(
 			"remote job handler changed operation %q type or version from %q version %d to %q version %d",
