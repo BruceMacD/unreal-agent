@@ -64,6 +64,7 @@ func (translator *fixedTranslator) TranslateResult(
 }
 
 func TestRegistryOwnsCanonicalBashDefinition(t *testing.T) {
+	got := NewRegistry(StaticTranslators{}, BashName).StaticDefinitions()[0].Tool
 	want := llm.Tool{
 		Type:        llm.ToolFunction,
 		Name:        BashName,
@@ -84,6 +85,7 @@ func TestRegistryOwnsCanonicalBashDefinition(t *testing.T) {
 }
 
 func TestRegistryOwnsCanonicalSkillUseDefinition(t *testing.T) {
+	got := NewRegistry(StaticTranslators{}, SkillUseName).StaticDefinitions()[0].Tool
 	want := llm.Tool{
 		Type:        llm.ToolFunction,
 		Name:        SkillUseName,
@@ -105,6 +107,7 @@ func TestRegistryOwnsCanonicalSkillUseDefinition(t *testing.T) {
 }
 
 func TestRegistryStaticDefinitionsReturnsIndependentValues(t *testing.T) {
+	registry := NewRegistry(StaticTranslators{}, BashName)
 	definitions := registry.StaticDefinitions()
 	definitions[0].Tool.Name = "changed"
 	definitions[0].Tool.Parameters["changed"] = true

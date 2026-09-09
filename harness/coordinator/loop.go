@@ -230,6 +230,7 @@ func (current *coordinator) loadHistory(ctx context.Context) error {
 			return fmt.Errorf("load session history after %d: %w", after, err)
 		}
 		for _, item := range page.Items {
+			if err := current.restoreItem(item); err != nil {
 				return fmt.Errorf("load session item %d: %w", item.Sequence, err)
 			}
 		}
@@ -241,6 +242,24 @@ func (current *coordinator) loadHistory(ctx context.Context) error {
 		}
 		after = page.NextAfter
 	}
+}
+
+func (current *coordinator) restoreItem(item sessionstore.Item) error {
+	status, ok := item.Data.(sessionstore.ToolCallStatus)
+	if item.Kind == sessionstore.ItemToolCallStatus && ok && toolCallRequiresTranslator(status) {
+		call, exists := current.state.toolCalls[toolCallKey{turnID: status.TurnID, callID: status.CallID}]
+		if exists {
+			if _, available := current.dependencies.Tools.Resolve(call.toolCall.Name); !available {
+				return fmt.Errorf("tool %q required by recorded call %q is not available", call.toolCall.Name, status.CallID)
+			}
+		}
+	}
+	_, err := current.addItemToLocalState(item)
+	return err
+}
+
+func toolCallRequiresTranslator(status sessionstore.ToolCallStatus) bool {
+	return status.Status.Error == "" || len(status.Status.WaitingFor) != 0 || len(status.Operations) != 0
 }
 
 func (current *coordinator) addItemToLocalState(
@@ -392,6 +411,8 @@ func (current *coordinator) addToolResultToLocalState(
 	}
 	translator, exists := current.dependencies.Tools.Resolve(call.toolCall.Name)
 	if !exists {
+		if !toolCallRequiresTranslator(status) {
+		}
 		return nil
 	}
 
@@ -452,6 +473,11 @@ func (current *coordinator) scheduleToolCall(
 ) (sessionstore.ToolCallStatus, error) {
 	translator, exists := current.dependencies.Tools.Resolve(call.Name)
 	toolContext := &toolCallContext{}
+	var status tool.CallStatus
+		status = translator.Translate(toolContext, call)
+	} else {
+		status = tool.ErrorStatus(fmt.Sprintf("tool %q is not available", call.Name), 0)
+	}
 	operations := make([]operation.Operation, 0, len(toolContext.operations))
 	for _, value := range toolContext.operations {
 		operations = append(operations, current.addOperationToLocalState(value))

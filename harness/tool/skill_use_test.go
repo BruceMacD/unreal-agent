@@ -17,6 +17,7 @@ func TestSkillUseLoadsRegisteredSkillByName(t *testing.T) {
 	if err := os.WriteFile(path, []byte(want), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	registry := NewRegistry(StaticTranslators{}, SkillUseName)
 	if _, err := registry.RegisterSkill(Skill{Name: "review", Description: "Review code.", Path: path}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,6 +50,7 @@ func TestSkillUseLoadsRegisteredSkillByName(t *testing.T) {
 }
 
 func TestSkillUseRejectsInvalidSelection(t *testing.T) {
+	registry := NewRegistry(StaticTranslators{}, SkillUseName)
 	translator, exists := registry.Resolve(SkillUseName)
 	if !exists {
 		t.Fatal("SkillUse is not registered")

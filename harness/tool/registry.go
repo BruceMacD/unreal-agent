@@ -18,6 +18,9 @@ const (
 )
 
 type registry struct {
+	// The selection is copied at construction and never mutated; reads need no lock.
+	enabled map[string]struct{}
+
 	mu                sync.RWMutex
 	staticTranslators map[string]Translator
 	skills            map[RegistrationID]Skill
@@ -30,7 +33,11 @@ var _ Registry = (*registry)(nil)
 type StaticTranslators struct {
 }
 
+func NewRegistry(configured StaticTranslators, enabled ...string) Registry {
 	current := &registry{
+	}
+	for _, name := range enabled {
+		current.enabled[name] = struct{}{}
 	}
 	if configured.Bash == nil {
 		configured.Bash = unavailableTranslator{name: BashName}
@@ -43,15 +50,27 @@ type StaticTranslators struct {
 }
 
 func (current *registry) StaticDefinitions() []Definition {
+	var definitions []Definition
+	for _, definition := range staticDefinitions() {
+		if _, enabled := current.enabled[definition.Tool.Name]; enabled {
+			definitions = append(definitions, definition)
+		}
+	}
+	return definitions
 }
 
 func (current *registry) Resolve(name string) (Translator, bool) {
 	if translator, exists := current.staticTranslators[name]; exists {
+		if _, enabled := current.enabled[name]; !enabled {
+			return nil, false
+		}
 		return translator, true
 	}
 }
 
 func (current *registry) RegisterSkill(skill Skill) (RegistrationID, error) {
+	if err := validateSkill(skill); err != nil {
+		return uuid.Nil(), err
 	}
 	current.mu.Lock()
 	defer current.mu.Unlock()
@@ -68,6 +87,19 @@ func (current *registry) RegisterSkill(skill Skill) (RegistrationID, error) {
 	current.skillIDsByPath[skill.Path] = id
 	current.skillOrder = append(current.skillOrder, id)
 	return id, nil
+}
+
+func validateSkill(skill Skill) error {
+	if strings.TrimSpace(skill.Path) == "" {
+		return errors.New("skill path must be set")
+	}
+	if strings.TrimSpace(skill.Name) == "" {
+		return errors.New("skill name must be set")
+	}
+	if strings.TrimSpace(skill.Description) == "" {
+		return errors.New("skill description must be set")
+	}
+	return nil
 }
 
 func (current *registry) UnregisterSkill(id RegistrationID) {
@@ -107,11 +139,15 @@ func (current *registry) resolveSkill(name string) (Skill, bool) {
 	return Skill{}, false
 }
 
+func DiscoverSkills(directory string) ([]Skill, []error) {
 	paths, err := filepath.Glob(filepath.Join(directory, "*", "SKILL.md"))
 	if err != nil {
+		return nil, []error{fmt.Errorf("find skills: %w", err)}
 	}
 
+	var skills []Skill
 	var skillErrors []error
+	names := make(map[string]struct{})
 	for _, path := range paths {
 		contents, err := os.ReadFile(path)
 		if err != nil {
@@ -123,11 +159,23 @@ func (current *registry) resolveSkill(name string) (Skill, bool) {
 			skillErrors = append(skillErrors, fmt.Errorf("parse skill %q: %w", path, err))
 			continue
 		}
+		skill := Skill{
 			Name:        strings.TrimSpace(frontmatter.Name),
 			Description: strings.TrimSpace(frontmatter.Description),
 			Path:        path,
 		}
+		if err := validateSkill(skill); err != nil {
+			skillErrors = append(skillErrors, fmt.Errorf("validate skill %q: %w", path, err))
+			continue
+		}
+		if _, exists := names[skill.Name]; exists {
+			skillErrors = append(skillErrors, fmt.Errorf("skill %q: duplicate name %q", path, skill.Name))
+			continue
+		}
+		names[skill.Name] = struct{}{}
+		skills = append(skills, skill)
 	}
+	return skills, skillErrors
 }
 
 type skillFrontmatter struct {

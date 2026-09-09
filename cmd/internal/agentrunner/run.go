@@ -217,6 +217,17 @@ func Run(
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+	skills, skillErrors := tool.DiscoverSkills(filepath.Join(workspace, ".harness", "skills"))
+	if len(skills) != 0 {
+	}
+	}
+		for _, skill := range skills {
+			if _, err := registry.RegisterSkill(skill); err != nil {
+				return fmt.Errorf("register skill %q: %w", skill.Path, err)
+			}
+		}
+	}
+	for _, skillErr := range skillErrors {
 		if _, err := fmt.Fprintf(flagOutput, "skill error> %s\n", skillErr); err != nil {
 			return fmt.Errorf("write skill error: %w", err)
 		}
@@ -255,6 +266,7 @@ func Run(
 	}
 	builder.SetSystemPrompt(systemPrompt)
 	for _, definition := range registry.StaticDefinitions() {
+		builder.AddTool(definition.Tool)
 	}
 
 	observer := &sessionObserver{

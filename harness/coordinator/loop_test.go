@@ -954,6 +954,7 @@ func TestCoordinatorRunPersistsToolCallBeforeDispatch(t *testing.T) {
 		inputs,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
 		adapter,
 	)
 	done := make(chan error, 1)
@@ -1002,6 +1003,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForValidationError(t *testing.T) {
 		inputs,
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}, tool.BashName),
 		adapter,
 	)
 	done := make(chan error, 1)
@@ -1065,6 +1067,7 @@ func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) 
 		inputs,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
 		adapter,
 	)
 	done := make(chan error, 1)
@@ -1307,6 +1310,7 @@ func TestCoordinatorRunDropsSuccessfulResponseFromSupersededTurn(t *testing.T) {
 		inputs,
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
 		adapter,
 	)
 	done := make(chan error, 1)
@@ -1404,6 +1408,7 @@ func TestCoordinatorHandlesModelResponseBeforeSchedulingToolCalls(t *testing.T) 
 		store,
 		operations,
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
 	)
 
 	if _, err := current.handleModelResponse(t.Context(), response); err != nil {
@@ -1428,6 +1433,7 @@ func TestCoordinatorDoesNotScheduleToolCallsWhenModelResponseStoreFails(t *testi
 		store,
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
 	)
 	response := sessionstore.ModelResponse{
 		TurnID: "turn-1",
@@ -1497,6 +1503,7 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 	firstSpec.MaxOutputLength = 3
 	secondSpec.MaxOutputLength = 7
 	translator := &submittingTranslator{specs: []operation.Spec{firstSpec, secondSpec}}
+	registry := tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName)
 	handled := llm.ToolCall{CallID: "call-handled", Name: tool.BashName, Arguments: `{}`}
 	missing := llm.ToolCall{CallID: "call-missing", Name: tool.BashName, Arguments: `{}`}
 	store := &fakeStore{
@@ -1599,6 +1606,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testin
 		inputs,
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
+		tool.NewRegistry(tool.StaticTranslators{}, tool.BashName),
 		adapter,
 	)
 	done := make(chan error, 1)
