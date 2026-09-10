@@ -54,3 +54,14 @@ func TestRunnerProviderRetries(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerProviderDefaultModels(t *testing.T) {
+		want := ""
+		if provider.Name == "openai" {
+			want = "gpt-6-astra"
+		}
+		if provider.DefaultModel != want {
+			t.Errorf("%s default model = %q, want %q", provider.Name, provider.DefaultModel, want)
+		}
+	}
+}
