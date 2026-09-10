@@ -11,6 +11,8 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
+// ToolCallRunningPayload is the result a running call shows until it completes.
+const ToolCallRunningPayload = "Tool call is still running. Its result arrives in a later turn: continue with independent work, or end your turn to wait for it."
 
 //go:embed prompts/preamble.md
 var preambleFile string
