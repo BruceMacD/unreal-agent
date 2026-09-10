@@ -154,6 +154,7 @@ func (current *coordinator) interruptModel() {
 	}
 }
 
+func (current *coordinator) acceptStop(request inbox.ControlMessage) {
 		return
 	}
 	current.stop.request = request
@@ -386,6 +387,7 @@ func (current *coordinator) addItemToLocalState(
 			current.state.availableInputs++
 		}
 		if input.Kind == inbox.InputControl {
+			request, err := input.DecodeControlMessage()
 			if err != nil {
 				return sessionstore.Item{}, err
 			}

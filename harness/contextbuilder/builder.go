@@ -54,6 +54,7 @@ func (current *builder) SetModel(model llm.Model) {
 	current.request.Model = model
 }
 
+func (current *builder) AddControlMessage(request inbox.ControlMessage) {
 	}
 }
 

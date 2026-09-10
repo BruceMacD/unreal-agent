@@ -324,7 +324,9 @@ func (run *stopTestRun) assertStopped(t *testing.T) {
 	}
 }
 
+func stopInput(t *testing.T, id inbox.ID, mode inbox.ControlMode) inbox.Input {
 	t.Helper()
+	payload, err := json.Marshal(inbox.ControlMessage{Mode: mode, Reason: "user requested stop"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,6 +31,7 @@ func (input Input) Validate() error {
 	switch input.Kind {
 	case InputExternal, InputCrash:
 	case InputControl:
+		if _, err := input.DecodeControlMessage(); err != nil {
 			return err
 		}
 	default:
@@ -42,17 +43,23 @@ func (input Input) Validate() error {
 	return nil
 }
 
+type ControlMode string
 
 const (
 )
 
+type ControlMessage struct {
 }
 
+func (input Input) DecodeControlMessage() (ControlMessage, error) {
 	if input.Kind != InputControl {
+		return ControlMessage{}, fmt.Errorf("control message input has kind %q", input.Kind)
 	}
+		return ControlMessage{}, fmt.Errorf("decode control message: %w", err)
 	}
 	switch request.Mode {
 	default:
+		return ControlMessage{}, fmt.Errorf("unsupported control mode %q", request.Mode)
 	}
 }
 

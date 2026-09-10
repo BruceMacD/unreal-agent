@@ -270,6 +270,7 @@ func Run(
 		}
 	}
 
+	stopPayload, err := json.Marshal(inbox.ControlMessage{Mode: inbox.StopWhenIdle})
 	if err != nil {
 		return fmt.Errorf("encode stop request: %w", err)
 	}
