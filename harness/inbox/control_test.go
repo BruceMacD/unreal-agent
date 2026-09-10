@@ -25,6 +25,13 @@ func TestInboxControlMessages(t *testing.T) {
 }
 
 func TestInboxRejectsInvalidControlMessages(t *testing.T) {
+	for _, payload := range []string{
+		`{"Mode":"hard","extra":true}`,
+		`{"Mode":"heartbeat","Reason":"waiting","extra":true}`,
+		`{"Mode":"heartbeat"}`,
+		`{"Mode":"heartbeat","Reason":""}`,
+		`{"Mode":"heartbeat","Reason":null}`,
+	} {
 		t.Run(payload, func(t *testing.T) {
 			input := inbox.Input{ID: "stop", Kind: inbox.InputControl, Payload: jsontext.Value(payload)}
 			if err := newInbox(t).Submit(t.Context(), input); err == nil {

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
@@ -66,6 +67,9 @@ func newLoopState() loopState {
 }
 
 func (current *coordinator) Run(ctx context.Context) error {
+	if current.dependencies.ToolHeartbeatInterval < 0 {
+		return fmt.Errorf("tool heartbeat interval must not be negative")
+	}
 	if err := current.restore(ctx); err != nil {
 		return err
 	}
@@ -94,7 +98,13 @@ func (current *coordinator) Run(ctx context.Context) error {
 		}
 	}
 
+	var heartbeat <-chan time.Time
 	for {
+		if !current.isWaitingForOnlyToolCalls() {
+			heartbeat = nil
+		} else if heartbeat == nil && current.dependencies.ToolHeartbeatInterval > 0 {
+			heartbeat = time.After(current.dependencies.ToolHeartbeatInterval)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -108,6 +118,11 @@ func (current *coordinator) Run(ctx context.Context) error {
 			if !open {
 				return closedInputError(ctx, "operation updates")
 			}
+			}
+
+		case <-heartbeat:
+			if err := current.postHeartbeat(ctx); err != nil {
+				return err
 			}
 
 				continue
@@ -131,6 +146,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			// heartbeat is cleared immediately at the top of the loop, because now we're waiting for the model response
 		}
 		if current.stop.request.Mode == inbox.StopWhenIdle && current.isIdle() {
 			return ctx.Err()
@@ -145,6 +161,22 @@ func (current *coordinator) Run(ctx context.Context) error {
 func (current *coordinator) isIdle() bool {
 	return current.cancelModel == nil && current.pendingInputs() == 0 &&
 		len(current.state.toolCalls) == 0 && !current.hasPendingOperations()
+}
+
+func (current *coordinator) isWaitingForOnlyToolCalls() bool {
+		current.pendingInputs() == 0 && len(current.state.toolCalls) != 0
+}
+
+func (current *coordinator) postHeartbeat(ctx context.Context) error {
+	payload, err := json.Marshal(inbox.ControlMessage{
+		Mode:   inbox.Heartbeat,
+	})
+	if err != nil {
+		return fmt.Errorf("encode heartbeat: %w", err)
+	}
+	return current.dependencies.Inbox.Submit(ctx, inbox.Input{
+		ID: inbox.ID(uuid.New().String()), Kind: inbox.InputControl, Payload: payload,
+	})
 }
 
 func (current *coordinator) interruptModel() {
@@ -391,6 +423,9 @@ func (current *coordinator) addItemToLocalState(
 			if err != nil {
 				return sessionstore.Item{}, err
 			}
+			current.dependencies.ContextBuilder.AddControlMessage(request)
+			if request.Mode == inbox.Heartbeat {
+				current.state.availableInputs++
 			}
 		}
 

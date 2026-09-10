@@ -43,6 +43,7 @@ func TestCoordinatorRejectsRestoreWhenRecordedCallRequiresUnavailableTool(t *tes
 					TurnID: "turn-1", CallID: "call-1", Status: test.status, Operations: test.operations,
 				}),
 			}
+			current := newTestCoordinator(store, newTestInbox(t), newFakeOperationManager(), contextbuilder.NewBuilder(),
 				tool.NewRegistry(tool.StaticTranslators{Bash: &submittingTranslator{}}))
 			err := current.restore(t.Context())
 			if err == nil || !strings.Contains(err.Error(), `tool "Bash" required by recorded call "call-1" is not available`) {
@@ -59,6 +60,7 @@ func TestCoordinatorSchedulesAvailableCallAlongsideUnavailableCall(t *testing.T)
 	}
 	translator := &submittingTranslator{specs: []operation.Spec{spec}}
 	store := emptyFakeStore()
+	current := newTestCoordinator(store, newTestInbox(t), newFakeOperationManager(), contextbuilder.NewBuilder(), tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName))
 	valid := llm.ToolCall{CallID: "valid", Name: tool.BashName, Arguments: `{}`}
 	statuses, err := current.handleModelResponse(t.Context(), sessionstore.ModelResponse{
 		TurnID: "turn-1",
@@ -107,6 +109,7 @@ func TestCoordinatorRestoresUnavailableToolCall(t *testing.T) {
 				}))
 			}
 			builder := contextbuilder.NewBuilder()
+			current := newTestCoordinator(store, newTestInbox(t), newFakeOperationManager(), builder, tool.NewRegistry(tool.StaticTranslators{}))
 			if err := current.restore(t.Context()); err != nil {
 				t.Fatal(err)
 			}

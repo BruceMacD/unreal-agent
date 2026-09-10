@@ -78,6 +78,7 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 			t.Run(fmt.Sprintf("input=%t/steer=%t", startWithInput, steer), func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					store, registry := independentToolCalls(t, 3)
+					inputs := newTestInbox(t)
 					operations := newFakeOperationManager()
 					type modelCall struct {
 						ctx      context.Context
@@ -117,6 +118,7 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 					}
 					firstPending := 0
 					if startWithInput {
+						submitTestInput(t, inputs, externalEvent(t, 1, "progress", "check progress"))
 						synctest.Wait()
 					} else {
 						finishOperation(0)
@@ -139,6 +141,7 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 						Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleAssistant, Text: "progress"},
 					}}}
 					if steer {
+						submitTestInput(t, inputs, externalEvent(t, 2, "steering", "summarize results"))
 						synctest.Wait()
 					} else {
 						first.response <- response
@@ -192,6 +195,7 @@ func TestCoordinatorRunSlurpsIndependentOperationCompletions(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		current := newTestCoordinatorWithAdapter(
+			store, newTestInbox(t), operations, contextbuilder.NewBuilder(), registry, adapter,
 		)
 		var runErr error
 		go func() { runErr = current.Run(ctx) }()
@@ -229,6 +233,7 @@ func TestCoordinatorRunPersistsCompletedUpdatesBeforeClosure(t *testing.T) {
 			return llm.Response{}, ctx.Err()
 		}}
 		builder := contextbuilder.NewBuilder()
+		current := newTestCoordinatorWithAdapter(store, newTestInbox(t), operations, builder, registry, adapter)
 		err := current.Run(t.Context())
 		if err == nil || err.Error() != "operation updates closed" {
 			t.Fatalf("Run error = %v, want closed operation updates error", err)

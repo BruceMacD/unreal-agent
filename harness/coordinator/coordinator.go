@@ -3,6 +3,7 @@ package coordinator
 
 import (
 	"context"
+	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -14,6 +15,15 @@ import (
 )
 
 type Dependencies struct {
+	ToolHeartbeatInterval time.Duration
+	SessionID             session.ID
+	Inbox                 *inbox.Inbox
+	Restored              sessionstore.ResumeState
+	Sessions              sessionstore.Store
+	ContextBuilder        contextbuilder.Builder
+	LLM                   llm.Adapter
+	Tools                 tool.Registry
+	Operations            operation.Manager
 }
 
 type Coordinator interface {

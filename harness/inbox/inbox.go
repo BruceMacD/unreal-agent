@@ -58,9 +58,14 @@ func (input Input) DecodeControlMessage() (ControlMessage, error) {
 		return ControlMessage{}, fmt.Errorf("decode control message: %w", err)
 	}
 	switch request.Mode {
+	case Heartbeat:
+		if request.Reason == "" {
+			return ControlMessage{}, fmt.Errorf("heartbeat reason is empty")
+		}
 	default:
 		return ControlMessage{}, fmt.Errorf("unsupported control mode %q", request.Mode)
 	}
+	return request, nil
 }
 
 type Writer interface {

@@ -114,6 +114,7 @@ func TestCoordinatorStopRejectsUnsupportedOperation(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 1)
 				run.current.dependencies.Operations = operation.NewLocalOperationManager(t.Context())
+				submitTestInput(t, run.inputs, stopInput(t, "stop", mode))
 				run.start(t)
 				select {
 				case err := <-run.done:

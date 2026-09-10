@@ -129,11 +129,15 @@ func Run(
 	sessionDirectory := flags.String("session-directory", defaultSessionDirectory, "directory containing session files")
 	workspaceDirectory := flags.String("workspace", ".", "agent workspace and Bash working directory")
 	logDirectory := flags.String("log-directory", "", "session JSONL log directory; defaults to <workspace>/logs")
+	toolHeartbeatInterval := flags.Duration("tool-heartbeat-interval", 10*time.Minute, "tool-wait heartbeat interval (0 disables)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *toolHeartbeatInterval < 0 {
+		return errors.New("tool heartbeat interval must not be negative")
 	}
 
 	if err != nil {
@@ -302,6 +306,15 @@ func Run(
 	observerID := store.AddObserver(observer.Observe)
 	defer store.RemoveObserver(observerID)
 	current := coordinator.New(coordinator.Dependencies{
+		ToolHeartbeatInterval: *toolHeartbeatInterval,
+		SessionID:             sessionID,
+		Inbox:                 inputs,
+		Restored:              restored,
+		Sessions:              store,
+		ContextBuilder:        builder,
+		LLM:                   client,
+		Tools:                 registry,
+		Operations:            operations,
 	})
 	coordinatorErr := current.Run(runContext)
 	if observerErr := observer.Err(); observerErr != nil {

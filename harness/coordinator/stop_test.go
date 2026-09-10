@@ -133,6 +133,7 @@ func TestCoordinatorCancellationWhileCollectingUpdates(t *testing.T) {
 				go func() { run.done <- run.current.Run(ctx) }()
 				synctest.Wait()
 				if source == "inbox" {
+					submitTestInput(t, run.inputs, externalEvent(t, 0, "input", "hello"))
 				} else {
 					value := run.store.resume.Operations[0]
 					value.Status = operation.StatusCompleted
@@ -249,6 +250,7 @@ type stopTestCall struct {
 type stopTestRun struct {
 	current    *coordinator
 	store      *fakeStore
+	inputs     *inbox.Inbox
 	operations *fakeOperationManager
 	calls      []stopTestCall
 	done       chan error
@@ -257,6 +259,7 @@ type stopTestRun struct {
 func newStopTestRun(t *testing.T, pending int) *stopTestRun {
 	t.Helper()
 	store, registry := independentToolCalls(t, pending)
+	run := &stopTestRun{store: store, inputs: newTestInbox(t), operations: newFakeOperationManager(), done: make(chan error, 1)}
 	adapter := &fakeAdapter{respond: func(ctx context.Context, request llm.Request) (llm.Response, error) {
 		call := stopTestCall{ctx: ctx, request: request, response: make(chan llm.Response)}
 		run.calls = append(run.calls, call)
@@ -282,7 +285,9 @@ func (run *stopTestRun) start(t *testing.T) {
 func (run *stopTestRun) input(t *testing.T, inputs ...inbox.Input) {
 	t.Helper()
 	for _, input := range inputs {
+		submitTestInput(t, run.inputs, input)
 	}
+	synctest.Wait()
 	synctest.Wait()
 }
 
@@ -291,6 +296,7 @@ func (run *stopTestRun) update(t *testing.T, index int, status operation.Status)
 	value := run.store.resume.Operations[index]
 	value.Status = status
 	run.operations.updates <- value
+	synctest.Wait()
 	synctest.Wait()
 }
 

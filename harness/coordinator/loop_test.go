@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
@@ -56,6 +57,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 		},
 	}
 	builder := contextbuilder.NewBuilder()
+	inputs := newTestInbox(t)
 	current := newTestCoordinator(store, inputs, newFakeOperationManager(), builder, registry)
 
 	if err := current.restore(t.Context()); err != nil {
@@ -110,6 +112,7 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 		items: items,
 	}
 	builder := contextbuilder.NewBuilder()
+	inputs := newTestInbox(t)
 	current := newTestCoordinator(
 		store,
 		inputs,
@@ -149,6 +152,7 @@ func TestCoordinatorReturnsSessionHistoryError(t *testing.T) {
 	store.itemsErr = errors.New("disk unavailable")
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -165,6 +169,7 @@ func TestCoordinatorRejectsSessionHistoryWithoutProgress(t *testing.T) {
 	store.itemsPage = &sessionstore.Page{More: true, NextAfter: sessionstore.BeforeFirst}
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -198,6 +203,7 @@ func TestCoordinatorKeepsUnreplayableToolStatusInLocalState(t *testing.T) {
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		builder,
 		registry,
@@ -253,6 +259,7 @@ func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		builder,
 		registry,
@@ -310,6 +317,7 @@ func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T)
 	operations := newFakeOperationManager()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		operations,
 		contextbuilder.NewBuilder(),
 		registry,
@@ -341,6 +349,7 @@ func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T)
 func TestCoordinatorTracksToolCalls(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		registry,
@@ -464,6 +473,7 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		newFakeOperationManager(),
 		builder,
 		registry,
@@ -500,6 +510,7 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 func TestCoordinatorAcceptsOrphanedToolStatus(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -525,6 +536,7 @@ func TestCoordinatorAcceptsOrphanedToolStatus(t *testing.T) {
 func TestCoordinatorReturnsToolResultTranslationError(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		registry,
@@ -549,6 +561,7 @@ func TestCoordinatorReturnsToolResultTranslationError(t *testing.T) {
 func TestCoordinatorSkipsToolResultWithoutAvailableTranslator(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -576,6 +589,7 @@ func TestCoordinatorSkipsToolResultWithoutAvailableTranslator(t *testing.T) {
 func TestCoordinatorSkipsToolResultWithUntrackedOperation(t *testing.T) {
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		registry,
@@ -614,6 +628,7 @@ func TestCoordinatorKeepsControlInputWithoutContextProjection(t *testing.T) {
 		items: []sessionstore.Item{storedItem(1, sessionstore.ItemInput, input)},
 	}
 	builder := contextbuilder.NewBuilder()
+	inputs := newTestInbox(t)
 	current := newTestCoordinator(
 		store,
 		inputs,
@@ -665,6 +680,7 @@ func TestCoordinatorRejectsInvalidSessionItemData(t *testing.T) {
 			}
 			current := newTestCoordinator(
 				store,
+				newTestInbox(t),
 				newFakeOperationManager(),
 				contextbuilder.NewBuilder(),
 				tool.NewRegistry(tool.StaticTranslators{}),
@@ -683,6 +699,7 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 		1,
 		sessionstore.ItemTurn,
 	)}
+	inputs := newTestInbox(t)
 	operations := newFakeOperationManager()
 	started := make(chan llm.Request, 1)
 	requestCanceled := make(chan error, 1)
@@ -721,6 +738,7 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 	}()
 
 	event := externalEvent(t, 1, "input-1", "hello")
+	submitTestInput(t, inputs, event)
 	request := receiveTestValue(t, started)
 	built, err := builder.Build()
 	if err != nil {
@@ -764,8 +782,11 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 
 func TestCoordinatorRunSlurpsQueuedInputsBeforeCallingModel(t *testing.T) {
 	store := emptyFakeStore()
+	inputs := newTestInbox(t)
 	first := externalEvent(t, 1, "input-1", "first")
 	second := externalEvent(t, 2, "input-2", "second")
+	submitTestInput(t, inputs, first)
+	submitTestInput(t, inputs, second)
 	started := make(chan llm.Request, 1)
 	adapter := &fakeAdapter{respond: func(
 		ctx context.Context,
@@ -812,6 +833,7 @@ func TestCoordinatorRunSlurpsQueuedInputsBeforeCallingModel(t *testing.T) {
 
 func TestCoordinatorRunDoesNotCallModelWhenRequestBuildFails(t *testing.T) {
 	store := emptyFakeStore()
+	inputs := newTestInbox(t)
 	adapter := &fakeAdapter{}
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -830,6 +852,7 @@ func TestCoordinatorRunDoesNotCallModelWhenRequestBuildFails(t *testing.T) {
 	}()
 
 	event := externalEvent(t, 1, "input-1", "hello")
+	submitTestInput(t, inputs, event)
 	err := receiveTestValue(t, done)
 	if err == nil || err.Error() != "build model request: context unavailable" {
 		t.Fatalf("Run error = %v", err)
@@ -848,6 +871,7 @@ func TestCoordinatorRunDoesNotCallModelWhenRequestBuildFails(t *testing.T) {
 func TestCoordinatorRunDoesNotCallModelWhenTurnStoreFails(t *testing.T) {
 	store := emptyFakeStore()
 	store.appendTurnErr = errors.New("disk unavailable")
+	inputs := newTestInbox(t)
 	adapter := &fakeAdapter{}
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -862,6 +886,7 @@ func TestCoordinatorRunDoesNotCallModelWhenTurnStoreFails(t *testing.T) {
 		done <- current.Run(t.Context())
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "hello"))
 	err := receiveTestValue(t, done)
 	if err == nil || !strings.Contains(err.Error(), "disk unavailable") {
 		t.Fatalf("Run error = %v", err)
@@ -891,6 +916,7 @@ func TestCoordinatorRunPersistsModelResponseForOriginatingTurn(t *testing.T) {
 	) (llm.Response, error) {
 		return response, nil
 	}}
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -905,6 +931,7 @@ func TestCoordinatorRunPersistsModelResponseForOriginatingTurn(t *testing.T) {
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "hello"))
 	stored := receiveTestValue(t, responseStored)
 	cancel()
 	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
@@ -951,6 +978,7 @@ func TestCoordinatorRunPersistsToolCallBeforeDispatch(t *testing.T) {
 	) (llm.Response, error) {
 		return response, nil
 	}}
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -965,6 +993,7 @@ func TestCoordinatorRunPersistsToolCallBeforeDispatch(t *testing.T) {
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "run"))
 	operationValue := receiveTestValue(t, dispatched)
 	cancel()
 	if err := receiveTestValue(t, done); !errors.Is(err, context.Canceled) {
@@ -1000,6 +1029,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForValidationError(t *testing.T) {
 		return llm.Response{}, ctx.Err()
 	}}
 	store := emptyFakeStore()
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -1014,6 +1044,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForValidationError(t *testing.T) {
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "run"))
 	firstRequest := receiveTestValue(t, started)
 	secondRequest := receiveTestValue(t, started)
 	cancel()
@@ -1064,6 +1095,7 @@ func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) 
 		dispatched <- value
 		return nil
 	}
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -1078,6 +1110,7 @@ func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) 
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "run"))
 	_ = receiveTestValue(t, started)
 	operationValue := receiveTestValue(t, dispatched)
 	operationValue.Status = operation.StatusCompleted
@@ -1142,6 +1175,7 @@ func TestCoordinatorRunBatchesCompletedToolCallsIntoOneTurn(t *testing.T) {
 		<-ctx.Done()
 		return llm.Response{}, ctx.Err()
 	}}
+	inputs := newTestInbox(t)
 	operations := newFakeOperationManager()
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
@@ -1187,6 +1221,7 @@ func TestCoordinatorRunSteersActiveModelRequest(t *testing.T) {
 		return llm.Response{}, ctx.Err()
 	}}
 	store := emptyFakeStore()
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -1201,7 +1236,9 @@ func TestCoordinatorRunSteersActiveModelRequest(t *testing.T) {
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "first"))
 	firstRequest := receiveTestValue(t, started)
+	submitTestInput(t, inputs, externalEvent(t, 2, "input-2", "second"))
 	secondRequest := receiveTestValue(t, started)
 	_ = receiveTestValue(t, firstCanceled)
 	select {
@@ -1245,6 +1282,7 @@ func TestCoordinatorRunHandlesOperationUpdateWhileModelIsRunning(t *testing.T) {
 	store.onSaveOperation = func(value operation.Operation) {
 		storedUpdate <- value
 	}
+	inputs := newTestInbox(t)
 	operations := newFakeOperationManager()
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
@@ -1260,6 +1298,7 @@ func TestCoordinatorRunHandlesOperationUpdateWhileModelIsRunning(t *testing.T) {
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "hello"))
 	_ = receiveTestValue(t, started)
 	update := initial
 	update.Status = operation.StatusAwaiting
@@ -1312,6 +1351,7 @@ func TestCoordinatorRunDropsSuccessfulResponseFromSupersededTurn(t *testing.T) {
 		<-releaseSecond
 		return secondResponse, nil
 	}}
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	current := newTestCoordinatorWithAdapter(
@@ -1327,7 +1367,9 @@ func TestCoordinatorRunDropsSuccessfulResponseFromSupersededTurn(t *testing.T) {
 		done <- current.Run(ctx)
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "first"))
 	_ = receiveTestValue(t, started)
+	submitTestInput(t, inputs, externalEvent(t, 2, "input-2", "second"))
 	_ = receiveTestValue(t, started)
 	_ = receiveTestValue(t, firstReturned)
 	time.Sleep(20 * time.Millisecond)
@@ -1367,6 +1409,7 @@ func TestCoordinatorRunReturnsCurrentModelError(t *testing.T) {
 		return llm.Response{}, providerErr
 	}}
 	store := emptyFakeStore()
+	inputs := newTestInbox(t)
 	current := newTestCoordinatorWithAdapter(
 		store,
 		inputs,
@@ -1380,6 +1423,7 @@ func TestCoordinatorRunReturnsCurrentModelError(t *testing.T) {
 		done <- current.Run(t.Context())
 	}()
 
+	submitTestInput(t, inputs, externalEvent(t, 1, "input-1", "hello"))
 	err := receiveTestValue(t, done)
 	if !errors.Is(err, providerErr) || !strings.Contains(err.Error(), "call model for turn") {
 		t.Fatalf("Run error = %v", err)
@@ -1415,6 +1459,7 @@ func TestCoordinatorHandlesModelResponseBeforeSchedulingToolCalls(t *testing.T) 
 	operations := newFakeOperationManager()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		operations,
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
@@ -1440,6 +1485,7 @@ func TestCoordinatorDoesNotScheduleToolCallsWhenModelResponseStoreFails(t *testi
 	translator := &submittingTranslator{}
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName),
@@ -1474,6 +1520,7 @@ func TestCoordinatorHandlesModelResponseWithoutToolCalls(t *testing.T) {
 	store := emptyFakeStore()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -1533,6 +1580,12 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 				Status: tool.CallStatus{Error: "already handled"},
 			}),
 		},
+	}
+	inboxContext, cancelInbox := context.WithCancel(t.Context())
+	cancelInbox()
+	inputs, inboxErr := inbox.New(inboxContext, nil)
+	if inboxErr != nil {
+		t.Fatal(inboxErr)
 	}
 	operations := newFakeOperationManager()
 	operations.addError = func(operation.Operation) error {
@@ -1616,6 +1669,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testin
 		<-ctx.Done()
 		return llm.Response{}, ctx.Err()
 	}}
+	inputs := newTestInbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	current := newTestCoordinatorWithAdapter(
 		store,
@@ -1646,7 +1700,10 @@ func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testin
 
 func TestCoordinatorRunRejectsExternalInputWithoutTextPayload(t *testing.T) {
 	store := emptyFakeStore()
+	inputs := newTestInbox(t)
+	submitTestInput(t, inputs, inbox.Input{
 		ID: "input-1", Kind: inbox.InputExternal, Payload: jsontext.Value(`{}`),
+	})
 	current := newTestCoordinator(
 		store,
 		inputs,
@@ -1669,6 +1726,7 @@ func TestCoordinatorRunRejectsExternalInputWithoutTextPayload(t *testing.T) {
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
 	}
 	store.resume.Operations = []operation.Operation{initial}
+	inputs := newTestInbox(t)
 	operations := newFakeOperationManager()
 	updated := initial
 	updated.Status = operation.StatusAwaiting
@@ -1705,6 +1763,7 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		builder,
 		registry,
@@ -1824,6 +1883,7 @@ func TestCoordinatorRunReturnsReconciliationError(t *testing.T) {
 	operations.updates <- completed
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		operations,
 		contextbuilder.NewBuilder(),
 		registry,
@@ -1844,6 +1904,7 @@ func TestCoordinatorDoesNotCompleteToolCallBeforeOperationIsStored(t *testing.T)
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		builder,
 		registry,
@@ -1904,6 +1965,12 @@ func TestCoordinatorRunDispatchesRestoredNonTerminalOperations(t *testing.T) {
 			ID: operation.ID(status), Type: operation.TypeShell, Version: 1, Status: status,
 		})
 	}
+	inboxContext, cancelInbox := context.WithCancel(t.Context())
+	cancelInbox()
+	inputs, inboxErr := inbox.New(inboxContext, nil)
+	if inboxErr != nil {
+		t.Fatal(inboxErr)
+	}
 	operations := newFakeOperationManager()
 	adapter := &fakeAdapter{}
 	current := newTestCoordinatorWithAdapter(
@@ -1947,6 +2014,7 @@ func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
 	}
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		operations,
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -1963,6 +2031,12 @@ func TestCoordinatorRunReturnsUnsupportedRecoveredOperation(t *testing.T) {
 	store.resume.Operations = []operation.Operation{
 		{ID: "unsupported", Type: "remote", Version: 1, Status: operation.StatusReady},
 		{ID: "supported", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady},
+	}
+	inboxContext, cancelInbox := context.WithCancel(t.Context())
+	cancelInbox()
+	inputs, inboxErr := inbox.New(inboxContext, nil)
+	if inboxErr != nil {
+		t.Fatal(inboxErr)
 	}
 	operations := newFakeOperationManager()
 	operations.addError = func(value operation.Operation) error {
@@ -1993,6 +2067,7 @@ func TestCoordinatorClonesOperationDataBeforeDispatch(t *testing.T) {
 	operations.mutateAdds = true
 	current := newTestCoordinator(
 		emptyFakeStore(),
+		newTestInbox(t),
 		operations,
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -2019,7 +2094,9 @@ func TestCoordinatorClonesOperationDataBeforeDispatch(t *testing.T) {
 func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.T) {
 	store := emptyFakeStore()
 	store.appendInputErr = errors.New("disk unavailable")
+	inputs := newTestInbox(t)
 	event := externalEvent(t, 1, "input-1", "hello")
+	submitTestInput(t, inputs, event)
 	current := newTestCoordinator(
 		store,
 		inputs,
@@ -2048,6 +2125,7 @@ func TestCoordinatorRunReturnsInputStoreErrorAfterUpdatingLocalState(t *testing.
 func TestCoordinatorRunReturnsOperationStoreErrorAfterUpdatingLocalState(t *testing.T) {
 	store := emptyFakeStore()
 	store.saveOperationErr = errors.New("disk unavailable")
+	inputs := newTestInbox(t)
 	operations := newFakeOperationManager()
 	update := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusAwaiting,
@@ -2077,6 +2155,7 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 	store := emptyFakeStore()
 	current := newTestCoordinator(
 		store,
+		newTestInbox(t),
 		newFakeOperationManager(),
 		contextbuilder.NewBuilder(),
 		tool.NewRegistry(tool.StaticTranslators{}),
@@ -2172,6 +2251,7 @@ func TestCoordinatorReturnsSessionItemStoreErrors(t *testing.T) {
 			store := emptyFakeStore()
 			current := newTestCoordinator(
 				store,
+				newTestInbox(t),
 				newFakeOperationManager(),
 				contextbuilder.NewBuilder(),
 				tool.NewRegistry(tool.StaticTranslators{}),
@@ -2187,6 +2267,29 @@ func TestCoordinatorReturnsSessionItemStoreErrors(t *testing.T) {
 }
 
 func TestCoordinatorRunReturnsContextCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := emptyFakeStore()
+		inputs := newTestInbox(t)
+		operations := newFakeOperationManager()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		current := newTestCoordinator(
+			store,
+			inputs,
+			operations,
+			contextbuilder.NewBuilder(),
+			tool.NewRegistry(tool.StaticTranslators{}),
+		)
+		done := make(chan error, 1)
+		go func() {
+			done <- current.Run(ctx)
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context cancellation", err)
+		}
+	})
 }
 
 func TestClosedInputErrorPrefersContextCancellation(t *testing.T) {
@@ -2199,6 +2302,7 @@ func TestClosedInputErrorPrefersContextCancellation(t *testing.T) {
 
 func newTestCoordinator(
 	store *fakeStore,
+	inputs *inbox.Inbox,
 	operations *fakeOperationManager,
 	builder contextbuilder.Builder,
 	registry tool.Registry,
@@ -2215,6 +2319,7 @@ func newTestCoordinator(
 
 func newTestCoordinatorWithAdapter(
 	store *fakeStore,
+	inputs *inbox.Inbox,
 	operations *fakeOperationManager,
 	builder contextbuilder.Builder,
 	registry tool.Registry,
@@ -2488,9 +2593,20 @@ func (store *fakeStore) Fork(
 	return sessionstore.Snapshot{}, errors.New("unexpected fork")
 }
 
+func newTestInbox(t *testing.T) *inbox.Inbox {
+	t.Helper()
+	inputs, err := inbox.New(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return inputs
 }
 
+func submitTestInput(t *testing.T, inputs *inbox.Inbox, input inbox.Input) {
+	t.Helper()
+	if err := inputs.Submit(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type fakeOperationManager struct {
