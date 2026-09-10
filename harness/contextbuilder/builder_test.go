@@ -186,6 +186,39 @@ func TestBuilderAppendsValidationErrorToolResult(t *testing.T) {
 	}
 }
 
+func TestBuilderRemovesOnlyStagedRunningResultsForUpdatedCall(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		name := "completed"
+		output := "done A"
+		if running {
+			name = "still running"
+			output = ToolCallRunningPayload
+		}
+		t.Run(name, func(t *testing.T) {
+			current := NewBuilder()
+			current.Commit()
+			if err := current.AddExternalInput(inbox.Input{ID: "input", Kind: inbox.InputExternal, Payload: []byte(`"continue"`)}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := current.Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := append([]llm.Item(nil), before.Request.Input...)
+			result, err := current.Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := withPreamble(
+				llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "continue"}},
+			)
+			if !reflect.DeepEqual(result.Request.Input, want) {
+				t.Fatalf("input = %#v, want %#v", result.Request.Input, want)
+			}
+			if !reflect.DeepEqual(before.Request.Input, original) {
+				t.Fatal("updating a staged result mutated a previously built request")
+			}
+		})
 	}
 }
 

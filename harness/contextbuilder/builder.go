@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -96,6 +97,12 @@ func (current *builder) AddToolResult(
 ) {
 	if running {
 	}
+	current.stagedSuffix = slices.DeleteFunc(current.stagedSuffix, func(item llm.Item) bool {
+		if item.Type != llm.ItemToolResult {
+			return false
+		}
+		result := item.Data.(llm.ToolResult)
+	})
 	current.stagedSuffix = append(current.stagedSuffix, llm.Item{
 		Type: llm.ItemToolResult,
 		Data: llm.ToolResult{CallID: callID, Output: payload},

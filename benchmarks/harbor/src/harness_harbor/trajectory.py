@@ -143,6 +143,14 @@ def bash_result(data: dict[str, Any]) -> str:
                 content = data["Status"]["Error"]
             else:
                 raise ValueError(f"Unsupported tool result: {name}")
+            pending_observations = [
+                result
+                for result in pending_observations
+                if not (
+                    result.source_call_id == data["CallID"]
+                    and result.content == RUNNING
+                )
+            ]
             result = ObservationResult(
                 source_call_id=data["CallID"],
                 content=content,

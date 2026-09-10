@@ -36,6 +36,15 @@ func TestCoordinatorSubmissionBoundarySurvivesRecovery(t *testing.T) {
 				sent := run.calls[0].request
 				original := append([]llm.Item(nil), sent.Input...)
 				assertStopResult(t, sent, "call-1", string(operation.StatusCompleted))
+				assertStopResult(t, sent, "call-0", contextbuilder.ToolCallRunningPayload)
+				for _, item := range sent.Input {
+					if item.Type != llm.ItemToolResult {
+						continue
+					}
+					result := item.Data.(llm.ToolResult)
+						t.Fatal("completion before submission retained its running placeholder")
+					}
+				}
 				run.update(t, 0, operation.StatusCompleted)
 				run.input(t, stopInput(t, "heartbeat", inbox.Heartbeat))
 				if len(run.calls) != 1 || run.calls[0].ctx.Err() != nil {

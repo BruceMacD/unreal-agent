@@ -1133,6 +1133,8 @@ func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) 
 	if len(options) != 2 || options[0].CacheKey != "session-1" || options[1].CacheKey != "session-1" {
 		t.Fatalf("request options = %#v, want session-1 cache keys for both turns", options)
 	}
+	if len(continuationRequest.Input) != 4 ||
+		continuationRequest.Input[3].Type != llm.ItemToolResult {
 		t.Fatalf("continuation request = %#v", continuationRequest)
 	}
 	if len(adapter.requestSnapshot()) != 2 || len(store.appendedTurns) != 2 {
@@ -1202,6 +1204,7 @@ func TestCoordinatorRunBatchesCompletedToolCallsIntoOneTurn(t *testing.T) {
 		store.appendedTurns[0].PreviousTurnID != "turn-1" {
 		t.Fatalf("statuses = %#v, turns = %#v", store.appendedStatuses, store.appendedTurns)
 	}
+	if len(adapter.requestSnapshot()) != 1 || len(request.Input) != 5 {
 		t.Fatalf("requests = %#v", adapter.requestSnapshot())
 	}
 }
