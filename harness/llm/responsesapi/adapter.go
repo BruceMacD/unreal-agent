@@ -17,6 +17,8 @@ import (
 
 const remoteSource primitives.SourceID = "llm.responsesapi"
 
+const DefaultMaxAttempts = primitives.DefaultRemoteMaxAttempts
+
 type APIError struct {
 	StatusCode int
 	Code       string
@@ -50,6 +52,8 @@ type Config struct {
 	Endpoint          string
 	Headers           map[string][]string
 	CacheKeyPlacement CacheKeyPlacement
+	// Nil uses DefaultMaxAttempts.
+	MaxAttempts *int
 	Trace func(Exchange)
 }
 
@@ -59,6 +63,7 @@ type adapter struct {
 	headers           map[string][]string
 	trace             func(Exchange)
 	cacheKeyPlacement CacheKeyPlacement
+	maxAttempts       int
 }
 
 var _ llm.Adapter = (*adapter)(nil)
@@ -70,12 +75,20 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 	if strings.TrimSpace(config.Endpoint) == "" {
 		return nil, errors.New("responses API endpoint must be set")
 	}
+	maxAttempts := DefaultMaxAttempts
+	if config.MaxAttempts != nil {
+		maxAttempts = *config.MaxAttempts
+	}
+	if maxAttempts <= 0 {
+		return nil, errors.New("max attempts must be positive")
+	}
 	return &adapter{
 		remote:            remote,
 		endpoint:          config.Endpoint,
 		headers:           config.Headers,
 		trace:             config.Trace,
 		cacheKeyPlacement: config.CacheKeyPlacement,
+		maxAttempts:       maxAttempts,
 	}, nil
 }
 

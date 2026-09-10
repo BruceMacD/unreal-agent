@@ -38,6 +38,7 @@ func TestDefaultRemoteRequest(t *testing.T) {
 		t.Fatalf("SSE options = %#v", request.SSE)
 	}
 	wantRetryPolicy := RemoteRetryPolicy{
+		MaxAttempts:          5,
 		InitialBackoff:       2 * time.Second,
 		MaxBackoff:           30 * time.Second,
 	}

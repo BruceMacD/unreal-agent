@@ -10,6 +10,10 @@ import (
 )
 
 type Config struct {
+	APIKey      string
+	BaseURL     string
+	MaxAttempts *int
+	Trace       func(Exchange)
 }
 
 type Exchange = responsesapi.Exchange
@@ -38,6 +42,7 @@ func NewClient(config Config) (*Client, error) {
 			"Content-Type":  {"application/json"},
 		},
 		Trace:             config.Trace,
+		MaxAttempts:       config.MaxAttempts,
 		CacheKeyPlacement: responsesapi.CacheKeyPlacement{Header: "x-session-id"},
 	})
 	if err != nil {

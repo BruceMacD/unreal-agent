@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/coordinator"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/llm/responsesapi"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
@@ -30,6 +32,13 @@ import (
 )
 
 const (
+	defaultProvider           = "openai"
+	defaultSessionDirectory   = ".harness/sessions"
+	llmAPIKeyEnvironment      = "UNREAL_HARNESS_LLM_API_KEY"
+	llmBaseURLEnvironment     = "UNREAL_HARNESS_LLM_BASE_URL"
+	llmModelEnvironment       = "UNREAL_HARNESS_LLM_MODEL"
+	llmProviderEnvironment    = "UNREAL_HARNESS_LLM_PROVIDER"
+	llmMaxAttemptsEnvironment = "UNREAL_HARNESS_LLM_MAX_ATTEMPTS"
 )
 
 const defaultSystemPrompt = `You are an AI agent running inside an isolated sandbox container.
@@ -152,6 +161,10 @@ func Run(
 			runErr = errors.Join(runErr, err)
 		}
 	}()
+	maxAttempts, err := resolveMaxAttempts(parsed.MaxAttempts, getenv)
+	if err != nil {
+		return err
+	}
 	providerName := strings.TrimSpace(getenv(llmProviderEnvironment))
 	if providerName == "" {
 		providerName = defaultProvider
@@ -285,6 +298,23 @@ func Run(
 	if coordinatorErr != nil {
 		return fmt.Errorf("run coordinator: %w", coordinatorErr)
 	}
+}
+
+func resolveMaxAttempts(requested *int, getenv func(string) string) (int, error) {
+	maxAttempts := responsesapi.DefaultMaxAttempts
+	if requested != nil {
+		maxAttempts = *requested
+	} else if value := strings.TrimSpace(getenv(llmMaxAttemptsEnvironment)); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("parse %s: %w", llmMaxAttemptsEnvironment, err)
+		}
+		maxAttempts = parsed
+	}
+	if maxAttempts <= 0 {
+		return 0, errors.New("max attempts must be positive")
+	}
+	return maxAttempts, nil
 }
 
 func selectProvider(providers []Provider, name string) (Provider, error) {

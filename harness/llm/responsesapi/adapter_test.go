@@ -345,12 +345,24 @@ func TestRequestInputRejectsUnsupportedType(t *testing.T) {
 
 func newTestAdapter(t *testing.T, endpoint string) llm.Adapter {
 	t.Helper()
+	return newTestAdapterWithConfig(t, Config{
 		Endpoint: endpoint,
 		Headers: map[string][]string{
 			"Authorization": {"Bearer test-key"},
 			"Content-Type":  {"application/json"},
 		},
 	})
+}
+
+func newTestAdapterWithConfig(t *testing.T, config Config) llm.Adapter {
+	t.Helper()
+	remote := primitives.NewRemoteClient()
+	t.Cleanup(func() {
+		if err := remote.Close(); err != nil {
+			t.Errorf("close remote client: %v", err)
+		}
+	})
+	adapter, err := NewAdapter(remote, config)
 	if err != nil {
 		t.Fatalf("create adapter: %v", err)
 	}

@@ -23,6 +23,8 @@ const (
 	PrimitiveEventRemoteCompleted       PrimitiveEventType = "remote.completed"
 )
 
+const DefaultRemoteMaxAttempts = 5
+
 type RemoteRequest struct {
 	Source              SourceID
 	CorrelationID       CorrelationID
@@ -56,6 +58,7 @@ func DefaultRemoteRequest(source SourceID, correlationID CorrelationID, url stri
 		Headers:             make(map[string][]string),
 		ResponseIdleTimeout: 30 * time.Second,
 		RetryPolicy: RemoteRetryPolicy{
+			MaxAttempts:    DefaultRemoteMaxAttempts,
 			InitialBackoff: 2 * time.Second,
 			MaxBackoff:     30 * time.Second,
 			RetryableStatusCodes: []int{

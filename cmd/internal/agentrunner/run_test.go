@@ -152,6 +152,7 @@ func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 		},
 		{
 			Name: "openrouter", BaseURL: "https://default.example/v1", DefaultModel: "router-model",
+				if apiKey != "custom-secret" || baseURL != "https://custom.example/v1" || maxAttempts != 2 {
 					return nil, errors.New("unexpected OpenRouter configuration")
 				}
 				selected = true
@@ -175,6 +176,8 @@ func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 				return "https://custom.example/v1"
 			case llmModelEnvironment:
 				return "environment-model"
+			case llmMaxAttemptsEnvironment:
+				return "2"
 			default:
 				return ""
 			}
@@ -353,6 +356,7 @@ func (client *fakeClient) Close() error {
 }
 
 		Name: "openai", BaseURL: "https://example.com",
+			if apiKey != "secret" || baseURL != "https://example.com" || maxAttempts != 5 {
 				return nil, errors.New("unexpected provider configuration")
 			}
 			return client, nil
