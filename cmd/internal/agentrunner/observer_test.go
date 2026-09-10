@@ -1,0 +1,71 @@
+package agentrunner
+
+import (
+	"bytes"
+	"context"
+	"encoding/json/v2"
+	"errors"
+	"testing"
+
+	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/session"
+	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
+)
+
+func TestSessionObserverDoesNotStopOnTextResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var output bytes.Buffer
+	observer := &sessionObserver{sessionID: "session", output: &output, cancel: cancel}
+	observer.Observe("session", sessionstore.Item{
+		Kind: sessionstore.ItemModelResponse,
+		Data: sessionstore.ModelResponse{Response: llm.Response{Output: []llm.Item{{
+			Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleAssistant, Text: "The checks are still running."},
+		}}}},
+	})
+	if err := observer.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() == 0 {
+		t.Fatal("model response was not written")
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("observer canceled the run: %v", err)
+	}
+}
+
+func TestSessionObserverStopsOnOutputFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	want := errors.New("output unavailable")
+	output := &failingItemWriter{kind: sessionstore.ItemTurn, err: want}
+	observer := &sessionObserver{sessionID: "session", output: output, cancel: cancel}
+	observer.Observe("other-session", item)
+	if output.writes != 0 || ctx.Err() != nil {
+		t.Fatal("unrelated session affected the observer")
+	}
+	observer.Observe("session", item)
+	if !errors.Is(observer.Err(), want) || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("observer error = %v, context error = %v", observer.Err(), ctx.Err())
+	}
+	output.err = errors.New("later failure")
+	observer.Observe("session", item)
+	if output.writes != 1 || !errors.Is(observer.Err(), want) {
+		t.Fatal("observer wrote again or replaced its first error")
+	}
+}
+
+type failingItemWriter struct {
+}
+
+func (output *failingItemWriter) Write(data []byte) (int, error) {
+	output.writes++
+	var item sessionstore.Item
+	if err := json.Unmarshal(data, &item); err != nil {
+		return 0, err
+	}
+	if item.Kind == output.kind {
+		return 0, output.err
+	}
+	return len(data), nil
+}

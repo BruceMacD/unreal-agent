@@ -21,9 +21,20 @@ const historyPageSize = 256
 type coordinator struct {
 	dependencies Dependencies
 	state        loopState
+	stop         stopState
+	cancelModel  context.CancelFunc
+}
+
+type stopState struct {
 }
 
 type loopState struct {
+	currentTurnID     session.TurnID
+	toolCalls         map[toolCallKey]toolCallState
+	operations        map[operation.ID]operation.Operation
+	availableInputs   int
+	deliveredInputs   int
+	currentTurnInputs int
 }
 
 type toolCallState struct {
@@ -61,6 +72,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 
 	modelContext, cancelModels := context.WithCancel(ctx)
 	defer cancelModels()
+	defer current.interruptModel()
 	modelResponses := make(chan modelResponseResult)
 
 	inboxOutput := current.dependencies.Inbox.Output()
@@ -69,9 +81,14 @@ func (current *coordinator) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, err := current.reconcileToolCalls(ctx); err != nil {
+		return err
+	}
 	if err := current.dispatchOperationsToManager(); err != nil {
 		return err
 	}
+	if toolCallStatusesRequireModelResponse(statuses) || current.pendingInputs() > 0 {
+		err = current.requestModelResponse(modelContext, modelResponses)
 		if err != nil {
 			return err
 		}
@@ -105,15 +122,77 @@ func (current *coordinator) Run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			if stopped {
+				return ctx.Err()
+			}
+			continue
+		}
+			err = current.requestModelResponse(modelContext, modelResponses)
+			if err != nil {
+				return err
+			}
+		}
+		if current.stop.request.Mode == inbox.StopWhenIdle && current.isIdle() {
+			return ctx.Err()
 		}
 	}
+}
+
+		current.interruptModel()
+	}
+}
+
+func (current *coordinator) isIdle() bool {
+	return current.cancelModel == nil && current.pendingInputs() == 0 &&
+		len(current.state.toolCalls) == 0 && !current.hasPendingOperations()
+}
+
+func (current *coordinator) interruptModel() {
+	if current.cancelModel != nil {
+		current.cancelModel()
+		current.cancelModel = nil
+	}
+}
+
+		return
+	}
+	current.stop.request = request
+}
+
+func (current *coordinator) pendingInputs() int {
+	return current.state.availableInputs - current.state.deliveredInputs
+}
+
+func (current *coordinator) hasPendingOperations() bool {
+	for _, value := range current.state.operations {
+		if !operationIsTerminal(value.Status) {
+			return true
+		}
+	}
+	return false
+}
+
+func (current *coordinator) cancelOperations() error {
+	var result error
+	for id, value := range current.state.operations {
+		if operationIsTerminal(value.Status) {
+			continue
+		}
+		if err := current.dependencies.Operations.Cancel(id, current.stop.request.Reason); err != nil {
+			result = errors.Join(result, fmt.Errorf("cancel operation %q: %w", id, err))
+		}
+	}
+	return result
 }
 
 func (current *coordinator) requestModelResponse(
 	ctx context.Context,
 	results chan<- modelResponseResult,
+) error {
+	current.interruptModel()
 	built, err := current.dependencies.ContextBuilder.Build()
 	if err != nil {
+		return fmt.Errorf("build model request: %w", err)
 	}
 	turn := session.Turn{
 		ID:             session.TurnID(uuid.New().String()),
@@ -124,11 +203,14 @@ func (current *coordinator) requestModelResponse(
 		Data: turn,
 	})
 	if err != nil {
+		return err
 	}
 	if err := current.storeItemInSessionStore(ctx, item); err != nil {
+		return err
 	}
 
 	requestContext, cancel := context.WithCancel(ctx)
+	current.cancelModel = cancel
 	go func() {
 		response, err := current.dependencies.LLM.Respond(requestContext, built.Request, llm.RequestOptions{
 			CacheKey: string(current.dependencies.SessionID),
@@ -142,6 +224,7 @@ func (current *coordinator) requestModelResponse(
 		case <-ctx.Done():
 		}
 	}()
+	return nil
 }
 
 func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.Input) error {
@@ -215,6 +298,7 @@ func (current *coordinator) restore(ctx context.Context) error {
 	if err := current.loadHistory(ctx); err != nil {
 		return err
 	}
+	for _, value := range current.dependencies.Restored.Operations {
 		current.addOperationToLocalState(value)
 	}
 	return nil
@@ -276,6 +360,9 @@ func (current *coordinator) addItemToLocalState(
 				item.Data,
 			)
 		}
+		// FIXME: Forks leave inherited calls without results and retain pending-input accounting.
+		clear(current.state.toolCalls)
+		clear(current.state.operations)
 
 	case sessionstore.ItemInput:
 		input, ok := item.Data.(inbox.Input)
@@ -296,6 +383,13 @@ func (current *coordinator) addItemToLocalState(
 					err,
 				)
 			}
+			current.state.availableInputs++
+		}
+		if input.Kind == inbox.InputControl {
+			if err != nil {
+				return sessionstore.Item{}, err
+			}
+			}
 		}
 
 	case sessionstore.ItemTurn:
@@ -307,6 +401,7 @@ func (current *coordinator) addItemToLocalState(
 			)
 		}
 		current.state.currentTurnID = turn.ID
+		current.state.currentTurnInputs = current.state.availableInputs
 
 	case sessionstore.ItemModelResponse:
 		response, ok := item.Data.(sessionstore.ModelResponse)
@@ -318,6 +413,9 @@ func (current *coordinator) addItemToLocalState(
 		}
 		// The complete output includes messages, reasoning, and tool calls.
 		current.dependencies.ContextBuilder.AddModelResponse(response.Response)
+		if response.TurnID == current.state.currentTurnID {
+			current.state.deliveredInputs = current.state.currentTurnInputs
+		}
 		current.addToolCallsToLocalState(response)
 
 	case sessionstore.ItemToolCallStatus:
@@ -380,9 +478,11 @@ func (current *coordinator) addToolCallOperationsToLocalState(
 	}] = call
 }
 
+func (current *coordinator) finishToolCall(
 	turnID session.TurnID,
 	callID string,
 ) {
+	current.state.availableInputs++
 }
 
 func (current *coordinator) toolCallOperationsAreTerminal(
@@ -415,6 +515,7 @@ func (current *coordinator) addToolResultToLocalState(
 	translator, exists := current.dependencies.Tools.Resolve(call.toolCall.Name)
 	if !exists {
 		if !toolCallRequiresTranslator(status) {
+			current.finishToolCall(status.TurnID, status.CallID)
 		}
 		return nil
 	}
@@ -441,6 +542,7 @@ func (current *coordinator) addToolResultToLocalState(
 		running,
 	)
 	if !running {
+		current.finishToolCall(status.TurnID, status.CallID)
 	}
 	return nil
 }
@@ -528,6 +630,7 @@ func (current *coordinator) reconcileToolCalls(
 		}
 		call := current.state.toolCalls[key]
 		if call.status == nil {
+			return nil, fmt.Errorf("reconcile untranslated tool call %q in turn %q", key.callID, key.turnID)
 		}
 		operations := make([]operation.Operation, 0, len(call.status.WaitingFor))
 		for _, id := range call.status.WaitingFor {

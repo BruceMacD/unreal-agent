@@ -4,6 +4,7 @@ package inbox
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 )
 
@@ -28,6 +29,10 @@ func (input Input) Validate() error {
 		return fmt.Errorf("input ID is empty")
 	}
 	switch input.Kind {
+	case InputExternal, InputCrash:
+	case InputControl:
+			return err
+		}
 	default:
 		return fmt.Errorf("input %q has unsupported kind %q", input.ID, input.Kind)
 	}
@@ -41,6 +46,14 @@ func (input Input) Validate() error {
 const (
 )
 
+}
+
+	if input.Kind != InputControl {
+	}
+	}
+	switch request.Mode {
+	default:
+	}
 }
 
 type Writer interface {

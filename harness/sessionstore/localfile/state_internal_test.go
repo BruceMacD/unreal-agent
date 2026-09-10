@@ -85,6 +85,8 @@ func TestStoredStateLifecycle(t *testing.T) {
 		t.Fatalf("first recorded time = %v, want %v", state.Items[0].RecordedAt, stateUpdatedAt)
 	}
 	resume := state.resume()
+	if len(resume.Operations) != 1 || !reflect.DeepEqual(resume.Operations[0], updated) {
+		t.Fatalf("resumed operations = %#v, want %#v", resume.Operations, updated)
 	}
 	if !reflect.DeepEqual(resume.ExternalInputIDs, []inbox.ID{"input-1"}) {
 		t.Fatalf("external input IDs = %#v", resume.ExternalInputIDs)
@@ -95,6 +97,7 @@ func TestResumeReturnsOnlyExternalInputIDs(t *testing.T) {
 	state := newStoredState("session-1", stateCreatedAt)
 	for _, input := range []inbox.Input{
 		{ID: "external-1", Kind: inbox.InputExternal},
+		{ID: "control-1", Kind: inbox.InputControl, Payload: []byte(`{"Mode":"hard"}`)},
 		{ID: "crash-1", Kind: inbox.InputCrash},
 		{ID: "external-2", Kind: inbox.InputExternal},
 	} {

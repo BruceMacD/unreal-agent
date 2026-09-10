@@ -106,6 +106,8 @@ description: Review code.
 		t.Fatalf("messages = %#v, want system preamble plus %#v", messages, wantMessages)
 	}
 	}
+	assertItemSequence(t, stdout.String(),
+	)
 	ids := inputIDs(t, stdout.String())
 	if len(ids) != 2 || ids[0] != "69621f8d-4f4d-49a5-8f7d-3b24fd855c01" {
 		t.Fatalf("input IDs = %#v", ids)
@@ -269,6 +271,8 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 			if strings.Contains(stdout.String(), "PATH=") || strings.Contains(stdout.String(), "secret") {
 				t.Fatal("persisted session items contain the process environment")
 			}
+			assertItemSequence(t, stdout.String(),
+			)
 		})
 	}
 }
@@ -381,6 +385,29 @@ func eventTypes(t *testing.T, output string) []string {
 	}
 }
 
+func assertItemSequence(t *testing.T, output string, want ...string) {
+	t.Helper()
+	decoder := jsontext.NewDecoder(strings.NewReader(output))
+	var kinds []string
+	for {
+		var item sessionstore.Item
+		if err := json.UnmarshalDecode(decoder, &item); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+		kind := string(item.Kind)
+		if item.Kind == sessionstore.ItemInput {
+			kind += "." + string(item.Data.(inbox.Input).Kind)
+		}
+		kinds = append(kinds, kind)
+	}
+	if got := strings.Join(kinds, " "); !slices.Contains(want, got) {
+		t.Fatalf("item sequence = %q, want one of %q", got, want)
+	}
+}
+
 func itemKinds(t *testing.T, output string) []sessionstore.ItemKind {
 	t.Helper()
 	decoder := jsontext.NewDecoder(strings.NewReader(output))
@@ -410,6 +437,10 @@ func inputIDs(t *testing.T, output string) []inbox.ID {
 			t.Fatal(err)
 		}
 		if item.Kind == sessionstore.ItemInput {
+			input := item.Data.(inbox.Input)
+			if input.Kind == inbox.InputExternal {
+				ids = append(ids, input.ID)
+			}
 		}
 	}
 }

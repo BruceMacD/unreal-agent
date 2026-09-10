@@ -285,12 +285,34 @@ func (head *sessionHead) saveOperation(value operation.Operation) error {
 
 func (state storedState) resume() sessionstore.ResumeState {
 	externalInputIDs := make([]inbox.ID, 0)
+	pending := make(map[operation.ID]struct{})
 	for _, item := range state.Items {
+		switch item.Kind {
+		case sessionstore.ItemInput:
+			input := item.Data.(inbox.Input)
+			if input.Kind == inbox.InputExternal {
+				externalInputIDs = append(externalInputIDs, input.ID)
+			}
+		case sessionstore.ItemToolCallStatus:
+			for _, value := range item.Data.(sessionstore.ToolCallStatus).Operations {
+				if terminalOperationStatus(value.Status) {
+					delete(pending, value.ID)
+				} else {
+					pending[value.ID] = struct{}{}
+				}
+			}
 		}
+	}
+	var operations []operation.Operation
+	for _, value := range state.Operations {
+		_, unrecorded := pending[value.ID]
+		if !terminalOperationStatus(value.Status) || unrecorded {
+			operations = append(operations, value)
 		}
 	}
 	return sessionstore.ResumeState{
 		Snapshot:         state.Snapshot,
+		Operations:       operations,
 		ExternalInputIDs: externalInputIDs,
 	}
 }

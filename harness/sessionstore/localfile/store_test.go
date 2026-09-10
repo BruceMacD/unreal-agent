@@ -150,6 +150,8 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume reopened session: %v", err)
 	}
+	if len(resume.Operations) != 1 || !reflect.DeepEqual(resume.Operations[0], initialOperation) {
+		t.Fatalf("resumed operations = %#v, want %#v", resume.Operations, initialOperation)
 	}
 	if !reflect.DeepEqual(resume.ExternalInputIDs, []inbox.ID{"input-1"}) {
 		t.Fatalf("external input IDs = %#v", resume.ExternalInputIDs)
@@ -370,6 +372,7 @@ func TestStoreAppendsJSONLRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(resume.Operations) != 1 || resume.Operations[0].Status != operation.StatusAwaiting {
 		t.Fatalf("resume = %#v", resume)
 	}
 }
@@ -420,6 +423,8 @@ func TestStorePersistsRepeatedToolCallStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(resume.Operations) != 0 {
+		t.Fatalf("resumed operations = %#v", resume.Operations)
 	}
 }
 
@@ -479,6 +484,7 @@ func TestReopenedStoreContinuesFromDerivedWriteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(resume.Operations) != 1 || resume.Operations[0].Status != operation.StatusAwaiting {
 		t.Fatalf("resume = %#v", resume)
 	}
 }
@@ -660,6 +666,8 @@ func TestCreateReplacesPopulatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(resume.Operations) != 0 {
+		t.Fatalf("replacement retained operations: %#v", resume.Operations)
 	}
 	createTurn(t, store, "session-1", "fresh-turn", "")
 	assertStoredItemKinds(t, newStore(t, directory), "session-1", sessionstore.ItemTurn)
@@ -692,6 +700,7 @@ func TestFailedReplacementEvictsCachedWriteState(t *testing.T) {
 	}
 }
 
+func TestStoreResumesUnsettledOperationsAndSavesLatestState(t *testing.T) {
 	store := newStore(t, t.TempDir())
 	createSessionWithTurn(t, store, "session-1", "turn-1", "")
 	operations := []operation.Operation{
@@ -719,8 +728,12 @@ func TestFailedReplacementEvictsCachedWriteState(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	wantIDs := []operation.ID{"ready", "awaiting", "canceling"}
+	if len(resume.Operations) != len(wantIDs) {
+		t.Fatalf("resumed operations = %#v", resume.Operations)
 	}
 	for index, wantID := range wantIDs {
+		if resume.Operations[index].ID != wantID {
+			t.Fatalf("operation %d = %q, want %q", index, resume.Operations[index].ID, wantID)
 		}
 	}
 
@@ -734,9 +747,44 @@ func TestFailedReplacementEvictsCachedWriteState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume after save: %v", err)
 	}
+	if resume.Operations[1].Status != operation.StatusCompleted || string(resume.Operations[1].State) != `{"n":20}` {
+		t.Fatalf("saved terminal state = %#v, want %#v", resume.Operations[1], updated)
+	}
+	if len(resume.Operations) != len(wantIDs) {
+		t.Fatalf("resumed operations after save = %#v", resume.Operations)
 	}
 	for index, wantID := range wantIDs {
+		if resume.Operations[index].ID != wantID {
+			t.Fatalf("operation %d after save = %q, want %q", index, resume.Operations[index].ID, wantID)
 		}
+	}
+	operations[1] = updated
+	status.Operations = operations
+	if err := store.AppendToolCallStatus(t.Context(), "session-1", status); err != nil {
+		t.Fatal(err)
+	}
+	resume, err = store.Resume(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(resume.Operations, []operation.Operation{operations[0], operations[2]}) {
+		t.Fatalf("recorded terminal states retained in resume: %#v", resume.Operations)
+	}
+	for _, index := range []int{0, 2} {
+		operations[index].Status = operation.StatusCompleted
+		if err := store.SaveOperation(t.Context(), "session-1", operations[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.AppendToolCallStatus(t.Context(), "session-1", status); err != nil {
+		t.Fatal(err)
+	}
+	resume, err = store.Resume(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resume.Operations) != 0 {
+		t.Fatalf("settled session retained operations: %#v", resume.Operations)
 	}
 }
 
@@ -807,6 +855,8 @@ func TestForkCopiesHistoryThroughTurnWithoutOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume child: %v", err)
 	}
+	if len(resume.Operations) != 0 {
+		t.Fatalf("child inherited operations: %#v", resume.Operations)
 	}
 
 	if err := store.AppendInput(t.Context(), "child", inbox.Input{
@@ -876,6 +926,8 @@ func TestForkPersistsDelayedStatusBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if len(resume.Operations) != 0 {
+			t.Fatalf("%s inherited operations: %#v", id, resume.Operations)
 		}
 	}
 }
@@ -1053,6 +1105,8 @@ func TestRejectedToolCallStatusesDoNotChangePersistedState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(resume.Operations) != 0 {
+				t.Fatalf("operations after rejection = %#v", resume.Operations)
 			}
 		})
 	}
@@ -1342,6 +1396,8 @@ func TestForkReportsParentTurnFailuresAndReplacesDestination(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if len(resume.Operations) != 0 {
+			t.Fatalf("child retained operations: %#v", resume.Operations)
 		}
 
 		if err := store.AppendInput(t.Context(), "child", inbox.Input{

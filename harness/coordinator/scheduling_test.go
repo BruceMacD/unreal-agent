@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"reflect"
@@ -15,6 +16,61 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
+
+func TestCoordinatorSchedulingResultFailurePreventsDispatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newStopTestRun(t, 0)
+		spec, err := operation.NewValueSpec(jsontext.Value(`1`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := errors.New("cannot translate result")
+		translator := &submittingResultErrorTranslator{err: want}
+		translator.specs = []operation.Spec{spec}
+		run.current.dependencies.Tools = tool.NewRegistry(tool.StaticTranslators{Bash: translator}, tool.BashName)
+		adapter := &fakeAdapter{respond: func(context.Context, llm.Request) (llm.Response, error) {
+			return llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: llm.ToolCall{
+				CallID: "call-1", Name: tool.BashName, Arguments: `{}`,
+			}}}}, nil
+		}}
+		run.current.dependencies.LLM = adapter
+		run.start(t)
+		run.input(t, externalEvent(t, 0, "input", "run it"))
+		if err := <-run.done; !errors.Is(err, want) {
+			t.Fatalf("Run error = %v, want result translation error", err)
+		}
+		if len(translator.calls) != 1 || len(run.store.appendedResponses) != 1 {
+			t.Fatal("model response was not persisted and translated")
+		}
+		if len(run.store.appendedStatuses) != 0 || len(run.operations.adds) != 0 || len(adapter.requestSnapshot()) != 1 {
+			t.Fatal("failed result translation committed a status, dispatched work, or started another request")
+		}
+	})
+}
+
+func TestCoordinatorReconciliationRejectsUntranslatedCall(t *testing.T) {
+	run := newStopTestRun(t, 1)
+	run.store.items = run.store.items[:2]
+	if err := run.current.loadHistory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := run.current.reconcileToolCalls(t.Context())
+	if err == nil || err.Error() != `reconcile untranslated tool call "call-0" in turn "turn-1"` {
+		t.Fatalf("reconciliation error = %v, want untranslated-call error", err)
+	}
+	if len(statuses) != 0 || len(run.store.appendedStatuses) != 0 || len(run.current.state.toolCalls) != 1 || run.current.pendingInputs() != 0 {
+		t.Fatal("reconciliation completed an untranslated call")
+	}
+}
+
+type submittingResultErrorTranslator struct {
+	submittingTranslator
+	err error
+}
+
+func (translator *submittingResultErrorTranslator) TranslateResult(string, tool.CallStatus, []operation.Operation) (llm.ToolResult, error) {
+	return llm.ToolResult{}, translator.err
+}
 
 func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 	for _, startWithInput := range []bool{false, true} {
@@ -48,6 +104,7 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 					go func() { runErr = current.Run(ctx) }()
 
 					finishOperation := func(index int) {
+						value := store.resume.Operations[index]
 						value.Status = operation.StatusCompleted
 						operations.updates <- value
 						synctest.Wait()
@@ -124,6 +181,7 @@ func TestCoordinatorRunSlurpsIndependentOperationCompletions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store, registry := independentToolCalls(t, 3)
 		operations := newFakeOperationManager()
+		for _, value := range store.resume.Operations {
 			value.Status = operation.StatusCompleted
 			operations.updates <- value
 		}
@@ -160,6 +218,7 @@ func TestCoordinatorRunPersistsCompletedUpdatesBeforeClosure(t *testing.T) {
 		store, registry := independentToolCalls(t, 3)
 		operations := newFakeOperationManager()
 		var completed []operation.Operation
+		for _, value := range store.resume.Operations {
 			value.Status = operation.StatusCompleted
 			completed = append(completed, value)
 			operations.updates <- value
@@ -198,6 +257,7 @@ func independentToolCalls(t *testing.T, count int) (*fakeStore, tool.Registry) {
 			Version: 1, Status: operation.StatusAwaiting,
 		}
 		response.Response.Output = append(response.Response.Output, llm.Item{Type: llm.ItemToolCall, Data: call})
+		store.resume.Operations = append(store.resume.Operations, value)
 		store.items = append(store.items,
 			storedItem(sessionstore.Sequence(len(store.items)+1), sessionstore.ItemToolCallStatus, sessionstore.ToolCallStatus{
 				TurnID: "turn-1", CallID: call.CallID,

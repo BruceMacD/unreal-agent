@@ -83,6 +83,8 @@ type sessionObserver struct {
 	output    io.Writer
 	cancel    context.CancelFunc
 
+	mu  sync.Mutex
+	err error
 }
 
 func RunMain(
@@ -268,6 +270,15 @@ func Run(
 		}
 	}
 
+	if err != nil {
+		return fmt.Errorf("encode stop request: %w", err)
+	}
+	if err := inputs.Submit(runContext, inbox.Input{
+		ID: inbox.ID(uuid.New().String()), Kind: inbox.InputControl, Payload: stopPayload,
+	}); err != nil {
+		return fmt.Errorf("submit stop request: %w", err)
+	}
+
 	builder := contextbuilder.NewBuilder(registry.Skills()...)
 	builder.SetModel(llm.Model{
 		ID:              model,
@@ -298,6 +309,7 @@ func Run(
 	if coordinatorErr != nil {
 		return fmt.Errorf("run coordinator: %w", coordinatorErr)
 	}
+	return nil
 }
 
 func resolveMaxAttempts(requested *int, getenv func(string) string) (int, error) {

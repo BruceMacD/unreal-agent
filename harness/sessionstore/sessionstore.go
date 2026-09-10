@@ -72,6 +72,7 @@ type Page struct {
 
 type ResumeState struct {
 	Snapshot         Snapshot
+	Operations       []operation.Operation // Unfinished operations and terminal states missing from tool-call history.
 	ExternalInputIDs []inbox.ID
 }
 

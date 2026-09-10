@@ -30,6 +30,7 @@ func TestInboxOutputsEveryInputKind(t *testing.T) {
 	inputs := newInbox(t)
 	want := []inbox.Input{
 		{ID: "external", Kind: inbox.InputExternal},
+		{ID: "control", Kind: inbox.InputControl, Payload: jsontext.Value(`{"Mode":"hard"}`)},
 		{ID: "crash", Kind: inbox.InputCrash},
 	}
 	for _, input := range want {
@@ -49,6 +50,7 @@ func TestInboxDeduplicatesInputID(t *testing.T) {
 	duplicate := inbox.Input{
 		ID:      "same-input",
 		Kind:    inbox.InputControl,
+		Payload: jsontext.Value(`{"Mode":"hard","Reason":"different"}`),
 	}
 	second := testInput("next-input")
 	if got := submitAndReceive(t, inputs, first); !reflect.DeepEqual(got, first) {

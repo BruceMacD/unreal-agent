@@ -17,6 +17,9 @@ type Dependencies struct {
 }
 
 type Coordinator interface {
+	// Run owns one session's decision loop until a stop control completes or
+	// the context is canceled. It returns nil for a completed stop. It is
+	// single-use; its caller must cancel the Inbox when Run returns.
 	Run(context.Context) error
 }
 

@@ -44,6 +44,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 			Snapshot: sessionstore.Snapshot{
 				Session: session.Session{ID: "session-1"},
 			},
+			Operations: []operation.Operation{resumedOperation},
 		},
 		items: []sessionstore.Item{
 			storedItem(1, sessionstore.ItemInput, input),
@@ -296,6 +297,7 @@ func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T)
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{
 			Snapshot:   sessionstore.Snapshot{Session: session.Session{ID: "session-1"}},
+			Operations: []operation.Operation{resumedSecond},
 		},
 		items: []sessionstore.Item{
 			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
@@ -603,6 +605,7 @@ func TestCoordinatorSkipsToolResultWithUntrackedOperation(t *testing.T) {
 
 func TestCoordinatorKeepsControlInputWithoutContextProjection(t *testing.T) {
 	input := inbox.Input{
+		ID: "control-input", Kind: inbox.InputControl, Payload: []byte(`{"Mode":"when_idle"}`),
 	}
 	store := &fakeStore{
 		resume: sessionstore.ResumeState{Snapshot: sessionstore.Snapshot{
@@ -1112,6 +1115,7 @@ func TestCoordinatorRunBatchesCompletedToolCallsIntoOneTurn(t *testing.T) {
 	}
 	status := tool.CallStatus{WaitingFor: []operation.ID{operationValue.ID}}
 	store := emptyFakeStore()
+	store.resume.Operations = []operation.Operation{operationValue}
 	store.items = []sessionstore.Item{
 		storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 			TurnID: "turn-1",
@@ -1236,6 +1240,7 @@ func TestCoordinatorRunHandlesOperationUpdateWhileModelIsRunning(t *testing.T) {
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
 	}
 	store := emptyFakeStore()
+	store.resume.Operations = []operation.Operation{initial}
 	storedUpdate := make(chan operation.Operation, 1)
 	store.onSaveOperation = func(value operation.Operation) {
 		storedUpdate <- value
@@ -1536,6 +1541,12 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 		}
 		return nil
 	}
+	requests := make(chan llm.Request, 1)
+	adapter := &fakeAdapter{respond: func(ctx context.Context, request llm.Request) (llm.Response, error) {
+		requests <- request
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}}
 	current := newTestCoordinatorWithAdapter(
 		store,
 		inputs,
@@ -1584,6 +1595,7 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 	if len(translator.calls) != 1 || len(store.appendedStatuses) != 1 {
 		t.Fatalf("rescheduled call: calls=%#v statuses=%#v", translator.calls, store.appendedStatuses)
 	}
+	assertStopResult(t, receiveTestValue(t, requests), handled.CallID, "already handled")
 }
 
 func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testing.T) {
@@ -1656,6 +1668,7 @@ func TestCoordinatorRunRejectsExternalInputWithoutTextPayload(t *testing.T) {
 	initial := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
 	}
+	store.resume.Operations = []operation.Operation{initial}
 	operations := newFakeOperationManager()
 	updated := initial
 	updated.Status = operation.StatusAwaiting
@@ -1790,6 +1803,7 @@ func TestCoordinatorRunReturnsReconciliationError(t *testing.T) {
 		Status: tool.CallStatus{WaitingFor: []operation.ID{value.ID}},
 	}
 	store := emptyFakeStore()
+	store.resume.Operations = []operation.Operation{value}
 	store.items = []sessionstore.Item{
 		storedItem(1, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 			TurnID: "turn-1",
@@ -1886,6 +1900,7 @@ func TestCoordinatorRunDispatchesRestoredNonTerminalOperations(t *testing.T) {
 		operation.StatusCanceled,
 	}
 	for _, status := range statuses {
+		store.resume.Operations = append(store.resume.Operations, operation.Operation{
 			ID: operation.ID(status), Type: operation.TypeShell, Version: 1, Status: status,
 		})
 	}
@@ -1925,6 +1940,7 @@ func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
 	value := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
 	}
+	store.resume.Operations = []operation.Operation{value}
 	operations := newFakeOperationManager()
 	operations.addError = func(operation.Operation) error {
 		return errors.New("dispatch failed")
@@ -1942,7 +1958,9 @@ func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunReturnsUnsupportedRecoveredOperation(t *testing.T) {
 	store := emptyFakeStore()
+	store.resume.Operations = []operation.Operation{
 		{ID: "unsupported", Type: "remote", Version: 1, Status: operation.StatusReady},
 		{ID: "supported", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady},
 	}
@@ -1962,6 +1980,8 @@ func TestCoordinatorRunReturnsOperationDispatchError(t *testing.T) {
 	)
 
 	err := current.Run(t.Context())
+	if !errors.Is(err, operation.ErrUnsupported) {
+		t.Fatalf("Run error = %v, want unsupported operation", err)
 	}
 	if _, ok := current.state.operations["unsupported"]; !ok {
 		t.Fatal("unsupported operation was not retained")
@@ -2474,6 +2494,13 @@ func (store *fakeStore) Fork(
 }
 
 type fakeOperationManager struct {
+	updates       chan operation.Operation
+	adds          []operation.Operation
+	addError      func(operation.Operation) error
+	mutateAdds    bool
+	cancels       []operation.ID
+	cancelReasons []string
+	cancelErr     error
 }
 
 func newFakeOperationManager() *fakeOperationManager {
@@ -2492,7 +2519,10 @@ func (manager *fakeOperationManager) Add(value operation.Operation) error {
 	return nil
 }
 
+func (manager *fakeOperationManager) Cancel(id operation.ID, reason string) error {
 	manager.cancels = append(manager.cancels, id)
+	manager.cancelReasons = append(manager.cancelReasons, reason)
+	return manager.cancelErr
 }
 
 func (manager *fakeOperationManager) Updates() <-chan operation.Operation {
