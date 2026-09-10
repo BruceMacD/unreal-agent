@@ -268,6 +268,18 @@ func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.In
 	if err != nil {
 		return err
 	}
+	if err := current.storeItemInSessionStore(ctx, item); err != nil {
+		return err
+	}
+	if input.Kind == inbox.InputControl {
+		request, err := input.DecodeControlMessage()
+		if err != nil {
+			return err
+		}
+			current.acceptStop(request)
+		}
+	}
+	return nil
 }
 
 func (current *coordinator) handleInboxInputs(ctx context.Context, inputs []inbox.Input) error {

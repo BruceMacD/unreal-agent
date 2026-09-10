@@ -221,6 +221,42 @@ func TestHeartbeatControlPreservesWhenIdleStop(t *testing.T) {
 	})
 }
 
+func TestCoordinatorHeartbeatPropagatesSubmissionFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newHeartbeatTestRun(t, 1)
+		run.current.dependencies.ToolHeartbeatInterval = time.Second
+
+		ctx, cancel := context.WithCancelCause(t.Context())
+		defer cancel(nil)
+		stoppedInbox, err := inbox.New(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := errors.New("heartbeat inbox stopped")
+		cancel(want)
+		run.store.onSaveOperation = func(operation.Operation) {
+			// Swap on the coordinator goroutine while retaining its live inbox output.
+			run.current.dependencies.Inbox = stoppedInbox
+		}
+		run.start(t)
+		run.update(t, 0, operation.StatusAwaiting)
+
+		advanceHeartbeatTime(time.Second)
+		select {
+		case err := <-run.done:
+			if !errors.Is(err, want) {
+				t.Fatalf("Run error = %v, want %v", err, want)
+			}
+		default:
+			t.Fatal("Run did not return the heartbeat submission error")
+		}
+		assertHeartbeatCount(t, run, 0)
+		if run.requestCount() != 0 {
+			t.Fatal("model ran after heartbeat submission failed")
+		}
+	})
+}
+
 func TestCoordinatorHeartbeatRequiresPersistence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		run := newHeartbeatTestRun(t, 1)
