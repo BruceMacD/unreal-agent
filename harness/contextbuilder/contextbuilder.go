@@ -38,5 +38,6 @@ type Builder interface {
 	AddModelResponse(llm.Response)
 	AddReasoning(llm.Reasoning)
 	AddTool(llm.Tool)
+	Commit()
 	Build() (Result, error)
 }

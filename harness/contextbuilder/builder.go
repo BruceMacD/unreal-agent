@@ -20,6 +20,11 @@ var preambleFile string
 var preamble = strings.TrimSpace(preambleFile)
 
 type builder struct {
+	request         llm.Request
+	preamble        string
+	systemPrompt    string
+	committedPrefix []llm.Item
+	stagedSuffix    []llm.Item
 }
 
 var _ Builder = (*builder)(nil)
@@ -29,6 +34,9 @@ func NewBuilder(skills ...tool.Skill) Builder {
 	if skillPrompt := formatSkillsForPrompt(skills); skillPrompt != "" {
 		currentPreamble += "\n\n" + skillPrompt
 	}
+	current := &builder{preamble: currentPreamble, committedPrefix: make([]llm.Item, 1)}
+	current.SetSystemPrompt("")
+	return current
 }
 
 func (current *builder) AddExternalInput(input inbox.Input) error {
@@ -44,6 +52,7 @@ func (current *builder) AddExternalInput(input inbox.Input) error {
 	if err := json.Unmarshal(input.Payload, &text); err != nil {
 		return fmt.Errorf("decode external input %q: %w", input.ID, err)
 	}
+	current.stagedSuffix = append(current.stagedSuffix, llm.Item{
 		Type: llm.ItemMessage,
 		Data: llm.Message{Role: llm.RoleUser, Text: text},
 	})
@@ -60,12 +69,18 @@ func (current *builder) AddControlMessage(request inbox.ControlMessage) {
 
 func (current *builder) SetSystemPrompt(prompt string) {
 	current.systemPrompt = prompt
+	current.committedPrefix[0] = llm.Item{Type: llm.ItemMessage, Data: llm.Message{
+		Role: llm.RoleSystem,
+		Text: strings.TrimSpace(current.preamble + "\n\n" + current.systemPrompt),
+	}}
 }
 
 func (current *builder) AddModelResponse(response llm.Response) {
+	current.committedPrefix = append(current.committedPrefix, response.Output...)
 }
 
 func (current *builder) AddReasoning(reasoning llm.Reasoning) {
+	current.stagedSuffix = append(current.stagedSuffix, llm.Item{
 		Type: llm.ItemReasoning,
 		Data: reasoning,
 	})
@@ -81,13 +96,22 @@ func (current *builder) AddToolResult(
 ) {
 	if running {
 	}
+	current.stagedSuffix = append(current.stagedSuffix, llm.Item{
 		Type: llm.ItemToolResult,
 		Data: llm.ToolResult{CallID: callID, Output: payload},
 	})
 }
 
+func (current *builder) Commit() {
+	current.committedPrefix = append(current.committedPrefix, current.stagedSuffix...)
+	current.stagedSuffix = nil
+}
+
 func (current *builder) Build() (Result, error) {
 	request := current.request
+	input := make([]llm.Item, 0, len(current.committedPrefix)+len(current.stagedSuffix))
+	input = append(input, current.committedPrefix...)
+	request.Input = append(input, current.stagedSuffix...)
 	request.Tools = append([]llm.Tool(nil), request.Tools...)
 	return Result{Request: request}, nil
 }

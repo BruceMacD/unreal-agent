@@ -451,6 +451,7 @@ func (current *coordinator) addItemToLocalState(
 		}
 		current.state.currentTurnID = turn.ID
 		current.state.currentTurnInputs = current.state.availableInputs
+		current.dependencies.ContextBuilder.Commit()
 
 	case sessionstore.ItemModelResponse:
 		response, ok := item.Data.(sessionstore.ModelResponse)

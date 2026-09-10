@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
+	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
@@ -43,6 +44,18 @@ func TestCoordinatorReplaysToolResultBalance(t *testing.T) {
 			}
 			if got := current.state.availableInputs; got != step.completed {
 				t.Fatalf("completed results = %d, want %d", got, step.completed)
+			}
+			built, err := current.dependencies.ContextBuilder.Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			appended := 0
+			for _, item := range built.Request.Input {
+					appended++
+				}
+			}
+			if appended != current.state.availableInputs {
+				t.Fatalf("appended completions = %d, available inputs = %d", appended, current.state.availableInputs)
 			}
 			if got := current.state.deliveredInputs; got != step.delivered {
 				t.Fatalf("delivered results = %d, want %d", got, step.delivered)
