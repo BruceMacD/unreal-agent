@@ -218,6 +218,9 @@ func TestShellActorRereadsAndReplacesInline(t *testing.T) {
 			t.Fatalf("read request = %#v", request)
 		}
 
+		completed := runShellActor(t, t.Context(), current)
+		state := shellState(t, completed)
+		result := state.Result
 		want := ""
 		if output != "" {
 		}
@@ -723,6 +726,8 @@ func TestShellReadsActualTailWithBoundedState(t *testing.T) {
 			if completed.Status != operation.StatusCompleted || state.Result == nil {
 				t.Fatalf("operation failed: %#v", state)
 			}
+			if state.Result.Out != wantOut || state.Result.Err != wantErr || !state.OutTruncated || !state.ErrTruncated || tailReads != 2 {
+				t.Fatalf("output = %q, error = %q, tail reads = %d; want %q", state.Result.Out, state.Result.Err, tailReads, wantOut)
 			}
 			if state.Result.OutSize != int64(len(test.text)) || state.Result.ErrSize != int64(len(test.text)) {
 				t.Fatal("original output byte counts changed")

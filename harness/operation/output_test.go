@@ -99,6 +99,9 @@ func TestShellPreparesOutputBeforePublishingCompletion(t *testing.T) {
 			if err := json.Unmarshal(step.Operation.State, &state); err != nil {
 				t.Fatal(err)
 			}
+			wantOut := strings.ReplaceAll(test.want, "{path}", filepath.Join(base, "shell", "out"))
+			wantErr := strings.ReplaceAll(test.want, "{path}", filepath.Join(base, "shell", "err"))
+			if step.Operation.Status != operation.StatusCompleted || state.Result == nil || state.Result.Out != wantOut || state.Result.Err != wantErr || state.OutTruncated != test.truncated || state.ErrTruncated != test.truncated {
 				t.Fatalf("state = %#v, result = %#v", state, state.Result)
 			}
 			if state.OutPath != filepath.Join(base, "shell", "out") || state.ErrPath != filepath.Join(base, "shell", "err") {

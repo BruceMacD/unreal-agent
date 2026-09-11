@@ -11,5 +11,10 @@ const (
 )
 
 func BoundOutput(text string, limit int) (string, bool) {
+}
+
+	}
+}
+
 	}
 }
