@@ -40,6 +40,16 @@ from harness_harbor.trajectory import convert
             raise ValueError(
                 "Model must use the openai/, openrouter/ or fireworks_ai/ prefix"
             )
+        # A task may declare MCP servers or a skills directory for agents that use
+        # the trajectory metadata rather than failing the trial.
+        self._not_offered = {
+            key: value
+            for key, value in (
+                ("task_mcp_servers", [server.name for server in self.mcp_servers]),
+                ("task_skills_dir", self.skills_dir),
+            )
+            if value
+        }
         self._bundle = Bundle.load(bundle)
         self._thinking_level = thinking_level
         self._runner_session = str(uuid4())
@@ -151,5 +161,6 @@ from harness_harbor.trajectory import convert
             **(context.metadata or {}),
             **identity.extra,
             **trajectory.extra,
+            **self._not_offered,
             "revision": self.version(),
         }

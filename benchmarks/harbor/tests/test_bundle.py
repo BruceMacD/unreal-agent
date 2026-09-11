@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import MCPServerConfig
 
 from harness_harbor.bundle import Bundle
 
@@ -92,3 +93,36 @@ class BundleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TaskCapabilityTests(unittest.TestCase):
+    def test_task_mcp_servers_and_skills_are_recorded_not_rejected(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "revision": "b" * 40,
+                        "sha256": hashlib.sha256(b"runner").hexdigest(),
+                        "goos": "linux",
+                        "goarch": "amd64",
+                    }
+                )
+            )
+                bundle=temporary,
+                logs_dir=path,
+                model_name="openai/test",
+                mcp_servers=[
+                    MCPServerConfig(
+                        name="playwright", transport="sse", url="http://mcp:3080/sse"
+                    )
+                ],
+                skills_dir="/app/.agents/skills",
+            )
+            self.assertEqual(
+                agent._not_offered,
+                {
+                    "task_mcp_servers": ["playwright"],
+                    "task_skills_dir": "/app/.agents/skills",
+                },
+            )
