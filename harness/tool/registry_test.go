@@ -68,6 +68,7 @@ func TestRegistryOwnsCanonicalBashDefinition(t *testing.T) {
 	want := llm.Tool{
 		Type:        llm.ToolFunction,
 		Name:        BashName,
+		Description: "Execute a shell command in background. Independent commands may be issued as parallel tool calls in one turn. Command child processes are killed when the shell exits.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
