@@ -41,6 +41,7 @@ func TestDefaultRemoteRequest(t *testing.T) {
 		MaxAttempts:          5,
 		InitialBackoff:       2 * time.Second,
 		MaxBackoff:           30 * time.Second,
+		RetryableStatusCodes: []int{408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529},
 	}
 	if request.RetryPolicy.MaxAttempts != wantRetryPolicy.MaxAttempts ||
 		request.RetryPolicy.InitialBackoff != wantRetryPolicy.InitialBackoff ||
@@ -341,8 +342,80 @@ func TestSendRemoteRequestReplaysBodyAcrossTemporaryRedirect(t *testing.T) {
 }
 
 func TestSendRemoteRequestRetriesTransientResponse(t *testing.T) {
+	for _, statusCode := range []int{http.StatusServiceUnavailable, 520, 521, 522, 523, 524, 529} {
+		t.Run(fmt.Sprint(statusCode), func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requestBody, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Errorf("read request body: %v", err)
+				}
+				if err := request.Body.Close(); err != nil {
+					t.Errorf("close request body: %v", err)
+				}
+				if string(requestBody) != "replayed" {
+					t.Errorf("request body = %q", requestBody)
+				}
 
+				attempt := attempts.Add(1)
+				writer.Header().Set("X-Attempt", fmt.Sprint(attempt))
+				if attempt == 1 {
+					writer.WriteHeader(statusCode)
+					if _, err := writer.Write([]byte("try later")); err != nil {
+						t.Errorf("write retry response: %v", err)
+					}
+					return
+				}
+				writer.WriteHeader(http.StatusOK)
+				if _, err := writer.Write([]byte("completed")); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
 
+			request := DefaultRemoteRequest("operation-1", "remote-1", server.URL)
+			request.Method = http.MethodPost
+			request.Body = []byte("replayed")
+			request.RetryPolicy.MaxAttempts = 2
+			request.RetryPolicy.InitialBackoff = 0
+			request.RetryPolicy.MaxBackoff = 0
+			events := collectInternalEvents(sendTestRemoteRequest(t, t.Context(), request))
+			if attempts.Load() != 2 {
+				t.Fatalf("attempts = %d, want 2", attempts.Load())
+			}
+			assertRemoteEventTypes(t, events, []PrimitiveEventType{
+				PrimitiveEventRemoteResponseStarted,
+				PrimitiveEventRemoteOutput,
+				PrimitiveEventRemoteRetryScheduled,
+				PrimitiveEventRemoteResponseStarted,
+				PrimitiveEventRemoteOutput,
+				PrimitiveEventRemoteCompleted,
+			})
+			startedEvents := remoteEventsOfType(events, PrimitiveEventRemoteResponseStarted)
+			firstStarted := startedEvents[0].Result.(RemoteResponseStartedResult)
+			if firstStarted.Attempt != 1 || firstStarted.StatusCode != statusCode ||
+				http.Header(firstStarted.Headers).Get("X-Attempt") != "1" {
+				t.Fatalf("first response = %#v", firstStarted)
+			}
+			if output := remoteAttemptOutput(t, events, 1); string(output) != "try later" {
+				t.Fatalf("first output = %q", output)
+			}
+			retry := remoteEventsOfType(events, PrimitiveEventRemoteRetryScheduled)[0].Result.(RemoteRetryScheduledResult)
+			if retry.Attempt != 1 || retry.Delay != 0 || !strings.Contains(retry.Reason, fmt.Sprint(statusCode)) {
+				t.Fatalf("retry = %#v", retry)
+			}
+			secondStarted := startedEvents[1].Result.(RemoteResponseStartedResult)
+			if secondStarted.Attempt != 2 || secondStarted.StatusCode != http.StatusOK ||
+				http.Header(secondStarted.Headers).Get("X-Attempt") != "2" {
+				t.Fatalf("second response = %#v", secondStarted)
+			}
+			if output := remoteAttemptOutput(t, events, 2); string(output) != "completed" {
+				t.Fatalf("second output = %q", output)
+			}
+			if completed := events[len(events)-1].Result.(RemoteCompletedResult); completed.Attempt != 2 {
+				t.Fatalf("completed = %#v", completed)
+			}
+		})
 	}
 }
 

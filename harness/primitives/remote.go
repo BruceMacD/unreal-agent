@@ -69,6 +69,12 @@ func DefaultRemoteRequest(source SourceID, correlationID CorrelationID, url stri
 				http.StatusBadGateway,
 				http.StatusServiceUnavailable,
 				http.StatusGatewayTimeout,
+				520,
+				521,
+				522,
+				523,
+				524,
+				529,
 			},
 		},
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -26,6 +27,17 @@ func TestAdapterRetryConfiguration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := newTestAdapterWithConfig(t, Config{Endpoint: "https://example.com/responses", MaxAttempts: test.limit}).(*adapter)
 			policy := client.remoteRequest(nil, "").RetryPolicy
+			}
+		})
+	}
+}
+
+func TestProviderErrorPreservesNonstandardStatusCode(t *testing.T) {
+	for _, statusCode := range []int{520, 521, 522, 523, 524, 529} {
+		t.Run(strconv.Itoa(statusCode), func(t *testing.T) {
+			err := providerError(statusCode, nil)
+			if err.StatusCode != statusCode || !strings.Contains(err.Error(), "status "+strconv.Itoa(statusCode)) {
+				t.Fatalf("error = %#v, message = %q", err, err.Error())
 			}
 		})
 	}
