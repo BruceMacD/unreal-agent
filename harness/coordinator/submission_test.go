@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -247,6 +248,14 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 			{ProviderID: "reasoning", Type: llm.ItemReasoning, Data: llm.Reasoning{Raw: jsontext.Value(`{"id":"reasoning","type":"reasoning","summary":[],"encrypted_content":"opaque"}`)}},
 		}}
 		run.respond(t, 0, response)
+		if run.requestCount() != 1 {
+			t.Fatal("previous completion started a turn instead of waiting for the new tool")
+		}
+		synctest.Sleep(time.Second - time.Nanosecond)
+		if run.requestCount() != 1 {
+			t.Fatal("previous completion started a turn before the tool grace period elapsed")
+		}
+		synctest.Sleep(time.Nanosecond)
 		want := first
 		want.Input = append(append([]llm.Item(nil), first.Input...), response.Output...)
 		want.Input = append(want.Input,
@@ -254,6 +263,7 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 		if len(run.calls) != 2 || !reflect.DeepEqual(run.calls[1].request, want) {
 			t.Fatal("new tool response, old completion, and new running result were reordered")
 		}
+		if len(translator.calls) != 1 || len(run.operations.adds) <= dispatches || run.current.state.deliveredInputs != 1 || run.current.state.currentTurnInputs != 2 {
 			t.Fatalf("new work: translations=%d, dispatches=%d, delivered=%d, submitted=%d", len(translator.calls), len(run.operations.adds), run.current.state.deliveredInputs, run.current.state.currentTurnInputs)
 		}
 		value := run.operations.adds[dispatches]

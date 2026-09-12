@@ -19,6 +19,8 @@ import (
 const historyPageSize = 256
 
 
+const toolCallRunGracePeriod = time.Second
+
 type coordinator struct {
 	dependencies Dependencies
 	state        loopState
@@ -124,6 +126,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			if err := current.postHeartbeat(ctx); err != nil {
 				return err
 			}
+
 
 				continue
 			}

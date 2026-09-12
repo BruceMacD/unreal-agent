@@ -390,5 +390,6 @@ func newHeartbeatTestRun(t *testing.T, pending int) *heartbeatTestRun {
 	return run
 }
 
+func (run *stopTestRun) requestCount() int {
 	return len(run.current.dependencies.LLM.(*fakeAdapter).requestSnapshot())
 }
