@@ -13,10 +13,13 @@ func TestSlurpChannelPreservesOrder(t *testing.T) {
 	for _, count := range []int{0, 3} {
 		synctest.Test(t, func(t *testing.T) {
 			output := make(chan int, count)
+			var want []int
+			for value := range count {
 				output <- value
 				want = append(want, value)
 			}
 			startedAt := time.Now()
+			got, err := slurpChannel(t.Context(), output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -32,10 +35,13 @@ func TestSlurpChannelPreservesOrder(t *testing.T) {
 
 func TestSlurpChannelResetsIdleTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		output := make(chan int, 1)
+		output <- 1
 		var values []int
 		var err error
 		done := make(chan struct{})
 		go func() {
+			values, err = slurpChannel(t.Context(), output)
 			close(done)
 		}()
 		synctest.Wait()
@@ -63,11 +69,14 @@ func TestSlurpChannelResetsIdleTimeout(t *testing.T) {
 func TestSlurpChannelCapsBatch(t *testing.T) {
 	for _, count := range []int{99, 100, 101} {
 		synctest.Test(t, func(t *testing.T) {
+			output := make(chan int, count)
 			want := make([]int, count)
+			for value := range count {
 				output <- value
 				want[value] = value
 			}
 			startedAt := time.Now()
+			got, err := slurpChannel(t.Context(), output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,6 +107,7 @@ func TestSlurpChannelReturnsAccumulatedValuesOnClosure(t *testing.T) {
 	for _, buffered := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			output := make(chan string, 2)
+			var want []string
 			if buffered {
 				output <- "second"
 				output <- "third"
@@ -105,6 +115,7 @@ func TestSlurpChannelReturnsAccumulatedValuesOnClosure(t *testing.T) {
 			}
 			close(output)
 			startedAt := time.Now()
+			got, err := slurpChannel(t.Context(), output)
 			if err != nil || !slices.Equal(got, want) {
 				t.Fatalf("slurp result = %v, %v; want %v, nil", got, err, want)
 			}
@@ -122,6 +133,7 @@ func TestSlurpChannelReturnsCancellationCause(t *testing.T) {
 		cause := errors.New("session stopped")
 		var err error
 		go func() {
+			_, err = slurpChannel(ctx, make(chan string))
 		}()
 		synctest.Wait()
 		startedAt := time.Now()

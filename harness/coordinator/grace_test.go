@@ -235,6 +235,7 @@ func updateToolGraceCall(t *testing.T, run *stopTestRun, callID string, terminal
 			value.Status = terminal
 			run.operations.updates <- value
 			synctest.Wait()
+			synctest.Sleep(2 * slurpIdleTimeout)
 			return
 		}
 	}

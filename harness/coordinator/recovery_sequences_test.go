@@ -276,6 +276,7 @@ func TestCoordinatorRetriesInitialToolStatusPersistenceFailure(t *testing.T) {
 		completed.Status = operation.StatusCompleted
 		resumed.operations.updates <- completed
 		synctest.Wait()
+		synctest.Sleep(2 * slurpIdleTimeout)
 		resumed.input(t, stopInput(t, "stop", inbox.StopWhenIdle))
 		if len(resumed.calls) != 1 {
 			t.Fatalf("requests = %d, want completed result delivery", len(resumed.calls))

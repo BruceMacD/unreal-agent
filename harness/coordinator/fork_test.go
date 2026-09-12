@@ -85,6 +85,7 @@ func TestCoordinatorForkStopsWhenChildIsIdle(t *testing.T) {
 						completed.Status = operation.StatusCompleted
 						child.operations.updates <- completed
 						synctest.Wait()
+						synctest.Sleep(2 * slurpIdleTimeout)
 						child.assertRunning(t)
 						child.respond(t, 1, textResponse("Child tool done."))
 					} else {

@@ -25,9 +25,11 @@ func TestCoordinatorHeartbeatsWhileWaitingForTools(t *testing.T) {
 		run.start(t)
 		advanceHeartbeatTime(30 * time.Second)
 		run.update(t, 0, operation.StatusAwaiting)
+		advanceHeartbeatTime(30*time.Second - (2 * slurpIdleTimeout) - time.Nanosecond)
 		if run.requestCount() != 0 {
 			t.Fatal("heartbeat arrived before the interval elapsed")
 		}
+		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
 		}
 		if run.requestCount() != 1 || countHeartbeatMessages(run.calls[0].request) != 1 {
@@ -41,6 +43,7 @@ func TestCoordinatorHeartbeatsWhileWaitingForTools(t *testing.T) {
 		run.respond(t, 0, textResponse("Still waiting."))
 		advanceHeartbeatTime(time.Minute - time.Nanosecond)
 		assertHeartbeatCount(t, run, 1)
+		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 2)
 		if run.requestCount() != 2 || countHeartbeatMessages(run.calls[1].request) != 2 {
 			t.Fatal("next heartbeat did not append exactly one check-in")
@@ -108,6 +111,7 @@ func TestCoordinatorHeartbeatYieldsToSteeringAndResults(t *testing.T) {
 		run.respond(t, 1, textResponse("One remains."))
 		advanceHeartbeatTime(time.Minute - time.Nanosecond)
 		assertHeartbeatCount(t, run, 0)
+		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
 	})
 }
@@ -122,10 +126,12 @@ func TestHeartbeatDiscardsPreviousDeadline(t *testing.T) {
 		run.input(t, externalEvent(t, 1, "steering", "continue"))
 		run.respond(t, 0, textResponse("Waiting."))
 		newDeadline := time.Now().Add(time.Minute)
+		advanceHeartbeatTime(time.Until(oldDeadline) + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 0)
 		if run.requestCount() != 1 {
 			t.Fatal("discarded deadline started a turn")
 		}
+		advanceHeartbeatTime(time.Until(newDeadline) + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
 	})
 }
@@ -136,6 +142,7 @@ func TestHeartbeatIntervalShorterThanInboxBatch(t *testing.T) {
 		run.current.dependencies.ToolHeartbeatInterval = time.Nanosecond
 		run.start(t)
 		for index := range 3 {
+			advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 			assertHeartbeatCount(t, run, index+1)
 			if run.requestCount() != index+1 {
 				t.Fatal("heartbeat prevented inbox delivery")
@@ -190,6 +197,7 @@ func TestHeartbeatWaitsForAllOperationsOfCall(t *testing.T) {
 		if run.requestCount() != 0 {
 			t.Fatal("partial completion started a turn")
 		}
+		advanceHeartbeatTime(time.Until(deadline) + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
 		run.respond(t, 0, textResponse("Waiting."))
 		run.update(t, 1, operation.StatusCompleted)

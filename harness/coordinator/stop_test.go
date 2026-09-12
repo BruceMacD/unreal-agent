@@ -143,12 +143,48 @@ func TestCoordinatorCancellationWhileCollectingUpdates(t *testing.T) {
 				want := errors.New("caller disconnected")
 				cancel(want)
 				synctest.Wait()
+				if err := <-run.done; !errors.Is(err, want) || !strings.HasPrefix(err.Error(), "slurp inbox:") {
 					t.Fatalf("Run error = %v, want collection cancellation cause", err)
 				}
+				wantInputs, wantUpdates := 1, 0
+				if source == "operation updates" {
+					wantInputs, wantUpdates = 0, 1
+				}
+				if len(run.store.appendedInputs) != wantInputs || len(run.store.savedOperations) != wantUpdates || len(run.calls) != 0 {
+					t.Fatal("selected event was not persisted before draining, or canceled draining started a model request")
 				}
 			})
 		})
 	}
+}
+
+func TestCoordinatorDrainsInboxAndOperationsBeforeCallingModel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newStopTestRun(t, 1)
+		run.start(t)
+		input := externalEvent(t, 0, "input", "check completed work")
+		submitTestInput(t, run.inputs, input)
+		update := run.store.resume.Operations[0]
+		update.Status = operation.StatusCompleted
+		run.operations.updates <- update
+		synctest.Wait()
+		synctest.Sleep(2 * slurpIdleTimeout)
+		synctest.Wait()
+
+		if len(run.calls) != 1 {
+			t.Fatalf("model requests = %d, want one request containing both events", len(run.calls))
+		}
+		assertCompletedResults(t, run.calls[0].request, 1)
+		foundInput := false
+		for _, item := range run.calls[0].request.Input {
+			if item.Type == llm.ItemMessage && item.Data.(llm.Message).Text == "check completed work" {
+				foundInput = true
+			}
+		}
+		if !foundInput || len(run.store.appendedInputs) != 1 || len(run.store.savedOperations) != 1 {
+			t.Fatal("request omitted the input, or selected and drained events were not persisted exactly once")
+		}
+	})
 }
 
 func TestCoordinatorCancellationTakesPrecedenceOverModelError(t *testing.T) {
@@ -288,6 +324,7 @@ func (run *stopTestRun) input(t *testing.T, inputs ...inbox.Input) {
 		submitTestInput(t, run.inputs, input)
 	}
 	synctest.Wait()
+	synctest.Sleep(2 * slurpIdleTimeout)
 	synctest.Wait()
 }
 
@@ -297,6 +334,7 @@ func (run *stopTestRun) update(t *testing.T, index int, status operation.Status)
 	value.Status = status
 	run.operations.updates <- value
 	synctest.Wait()
+	synctest.Sleep(2 * slurpIdleTimeout)
 	synctest.Wait()
 }
 
@@ -306,6 +344,8 @@ func (run *stopTestRun) respond(t *testing.T, index int, response llm.Response) 
 		t.Fatalf("request %d has not started", index)
 	}
 	run.calls[index].response <- response
+	synctest.Wait()
+	synctest.Sleep(2 * slurpIdleTimeout)
 	synctest.Wait()
 }
 

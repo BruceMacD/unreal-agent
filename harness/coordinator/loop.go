@@ -18,6 +18,10 @@ import (
 
 const historyPageSize = 256
 
+const (
+	slurpIdleTimeout = time.Millisecond
+	slurpMaxItems    = 100
+)
 
 const toolCallRunGracePeriod = time.Second
 
@@ -38,6 +42,8 @@ type loopState struct {
 	availableInputs   int
 	deliveredInputs   int
 	currentTurnInputs int
+	callModel         bool
+	grace             <-chan time.Time
 }
 
 type toolCallState struct {
@@ -111,15 +117,20 @@ func (current *coordinator) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 
+		case received, open := <-inboxOutput:
 			if !open {
 				return closedInputError(ctx, "inbox output")
 			}
+			if err := current.processInputs(ctx, []inbox.Input{received}); err != nil {
 				return err
 			}
 
+		case received, open := <-operationUpdates:
 			if !open {
 				return closedInputError(ctx, "operation updates")
 			}
+			if err := current.processOperations(ctx, []operation.Operation{received}); err != nil {
+				return err
 			}
 
 		case <-heartbeat:
@@ -127,13 +138,18 @@ func (current *coordinator) Run(ctx context.Context) error {
 				return err
 			}
 
+		case <-current.state.grace:
 
+		case received := <-modelResponses:
+			if current.cancelModel == nil || received.turnID != current.state.currentTurnID {
 				continue
 			}
+			if err := current.processModelResponse(ctx, received); err != nil {
 				return err
 			}
 		}
 
+		callModel, err := current.processEvents(ctx)
 		if err != nil {
 			return err
 		}
@@ -145,6 +161,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		if callModel {
 			err = current.requestModelResponse(modelContext, modelResponses)
 			if err != nil {
 				return err
@@ -155,6 +172,61 @@ func (current *coordinator) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+func (current *coordinator) processEvents(ctx context.Context) (bool, error) {
+	inputs, err := slurpChannel(ctx, current.dependencies.Inbox.Output())
+	if err != nil {
+		return false, fmt.Errorf("slurp inbox: %w", err)
+	}
+	if err := current.processInputs(ctx, inputs); err != nil {
+		return false, err
+	}
+	updates, err := slurpChannel(ctx, current.dependencies.Operations.Updates())
+	if err != nil {
+		return false, fmt.Errorf("slurp operation updates: %w", err)
+	}
+	if err := current.processOperations(ctx, updates); err != nil {
+		return false, err
+	}
+
+	if _, err := current.reconcileToolCalls(ctx); err != nil {
+		return false, err
+	}
+}
+
+func (current *coordinator) processInputs(ctx context.Context, inputs []inbox.Input) error {
+	return current.handleInboxInputs(ctx, inputs)
+}
+
+func (current *coordinator) processOperations(ctx context.Context, updates []operation.Operation) error {
+	for _, update := range updates {
+		if err := current.handleOperationUpdate(ctx, update); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (current *coordinator) processModelResponse(ctx context.Context, modelResponse modelResponseResult) error {
+	current.interruptModel()
+	if modelResponse.err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf("call model for turn %q: %w", modelResponse.turnID, modelResponse.err)
+	}
+	statuses, err := current.handleModelResponse(ctx, sessionstore.ModelResponse{
+		TurnID:   modelResponse.turnID,
+		Response: modelResponse.response,
+	})
+	if err != nil {
+		return err
+	}
+	if !current.state.callModel && len(statuses) > 0 {
+		current.state.grace = time.After(toolCallRunGracePeriod)
+	}
+	return nil
 }
 
 		current.interruptModel()
@@ -247,6 +319,7 @@ func (current *coordinator) requestModelResponse(
 
 	requestContext, cancel := context.WithCancel(ctx)
 	current.cancelModel = cancel
+	current.state.callModel = false
 	go func() {
 		response, err := current.dependencies.LLM.Respond(requestContext, built.Request, llm.RequestOptions{
 			CacheKey: string(current.dependencies.SessionID),
@@ -291,14 +364,17 @@ func (current *coordinator) handleInboxInputs(ctx context.Context, inputs []inbo
 			return err
 		}
 		if input.Kind == inbox.InputExternal {
+			current.state.callModel = true
 		}
 	}
+	return nil
 }
 
 func slurpChannel[T any](
 	ctx context.Context,
 	output <-chan T,
 ) ([]T, error) {
+	var inputs []T
 	idle := time.NewTimer(slurpIdleTimeout)
 	defer idle.Stop()
 	for len(inputs) < slurpMaxItems {
@@ -332,6 +408,12 @@ func (current *coordinator) handleModelResponse(
 	if err := current.storeItemInSessionStore(ctx, item); err != nil {
 		return nil, err
 	}
+	statuses, err := current.scheduleToolCalls(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current.state.callModel = toolCallStatusesRequireModelResponse(statuses)
+	return statuses, nil
 }
 
 func (current *coordinator) handleOperationUpdate(

@@ -109,6 +109,7 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 						value.Status = operation.StatusCompleted
 						operations.updates <- value
 						synctest.Wait()
+						synctest.Sleep(2 * slurpIdleTimeout)
 						if len(store.appendedStatuses) != index+1 {
 							t.Fatalf("completed tool statuses = %d, want %d", len(store.appendedStatuses), index+1)
 						}
@@ -120,6 +121,7 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 					if startWithInput {
 						submitTestInput(t, inputs, externalEvent(t, 1, "progress", "check progress"))
 						synctest.Wait()
+						synctest.Sleep(2 * slurpIdleTimeout)
 					} else {
 						finishOperation(0)
 						firstPending = 1
@@ -143,9 +145,11 @@ func TestCoordinatorRunDefersCompletionsUntilModelFinishes(t *testing.T) {
 					if steer {
 						submitTestInput(t, inputs, externalEvent(t, 2, "steering", "summarize results"))
 						synctest.Wait()
+						synctest.Sleep(2 * slurpIdleTimeout)
 					} else {
 						first.response <- response
 						synctest.Wait()
+						synctest.Sleep(2 * slurpIdleTimeout)
 					}
 					if len(calls) != 2 {
 						t.Fatalf("model requests = %d, want 2", len(calls))
@@ -200,6 +204,7 @@ func TestCoordinatorRunSlurpsIndependentOperationCompletions(t *testing.T) {
 		var runErr error
 		go func() { runErr = current.Run(ctx) }()
 		synctest.Wait()
+		synctest.Sleep(2 * slurpIdleTimeout)
 		requests := adapter.requestSnapshot()
 		if len(requests) != 1 {
 			t.Fatalf("model requests = %d, want 1", len(requests))

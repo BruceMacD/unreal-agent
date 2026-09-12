@@ -270,6 +270,7 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 		value.Status = operation.StatusCompleted
 		run.operations.updates <- value
 		synctest.Wait()
+		synctest.Sleep(2 * slurpIdleTimeout)
 		synctest.Wait()
 		secondResponse := textResponse("Waiting for C.")
 		run.respond(t, 1, secondResponse)
