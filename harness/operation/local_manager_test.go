@@ -549,6 +549,7 @@ func TestShellCaptureUpdateVolumeScalesLinearly(t *testing.T) {
 		base := t.TempDir()
 		id := operation.ID("large-capture")
 		contents := []byte(strings.Repeat("x", 4*limit+1))
+		createShellArtifacts(t, filepath.Join(base, string(id)), contents, contents)
 		exitCode := 0
 		current := shellOperationWithState(t, id, operation.ShellState{
 			Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,

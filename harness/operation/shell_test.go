@@ -40,6 +40,8 @@ func TestShellActorCapturesArtifactsAndCompletes(t *testing.T) {
 		t.Fatalf("state = %#v", state)
 	}
 	result := state.Result
+	if result.Out != stdout[:9]+"...57325 bytes truncated; complete output in "+state.OutPath+"..."+stdout[len(stdout)-10:] ||
+		result.Err != stderr[:9]+"...50157 bytes truncated; complete output in "+state.ErrPath+"..."+stderr[len(stderr)-10:] ||
 		result.OutSize != int64(len(stdout)) ||
 		result.ErrSize != int64(len(stderr)) ||
 		result.ExitCode != 7 {
@@ -49,6 +51,13 @@ func TestShellActorCapturesArtifactsAndCompletes(t *testing.T) {
 	directory := filepath.Join(baseDirectory, string(current.ID))
 	assertFileContents(t, filepath.Join(directory, operation.ShellOutFilename), []byte(stdout))
 	assertFileContents(t, filepath.Join(directory, operation.ShellErrFilename), []byte(stderr))
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("shell artifacts = %v, want only stdout and stderr", entries)
+	}
 }
 
 func TestShellSpecRejectsZeroInlineLength(t *testing.T) {
@@ -73,6 +82,7 @@ func TestShellActorStartsShellDirectlyWithCapturePaths(t *testing.T) {
 	if initial.OutPath != "" || initial.ErrPath != "" {
 		t.Fatal("capture paths exposed before file creation")
 	}
+	for index := range 3 {
 		request := oneDispatchData[primitives.IOCreateRequest](t, step, primitives.PrimitiveDispatchIOCreate)
 		events := make(chan primitives.PrimitiveEvent)
 		primitives.Create(t.Context(), request, events)
@@ -111,6 +121,7 @@ func TestShellActorPersistsSignalExitStatusBeforeReading(t *testing.T) {
 	baseDirectory := t.TempDir()
 	id := operation.ID("shell-signaled")
 	directory := filepath.Join(baseDirectory, string(id))
+	createShellArtifacts(t, directory, nil, nil)
 	current := shellOperationWithState(t, id, operation.ShellState{
 		Input:         operation.ShellInput{Shell: testShellPath},
 		BaseDirectory: baseDirectory,
@@ -121,6 +132,7 @@ func TestShellActorPersistsSignalExitStatusBeforeReading(t *testing.T) {
 	event := primitives.PrimitiveEvent{
 		Type:          primitives.PrimitiveEventProcessExited,
 		Source:        primitives.SourceID(id),
+		CorrelationID: "process",
 		Result:        primitives.ProcessExitResult{ExitCode: -1, Signal: syscall.SIGTERM},
 	}
 
@@ -128,8 +140,12 @@ func TestShellActorPersistsSignalExitStatusBeforeReading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request := oneDispatchData[primitives.IOReadRequest](t, step, primitives.PrimitiveDispatchIORead)
+	if request.Path != filepath.Join(directory, operation.ShellOutFilename) {
+		t.Fatalf("read request = %#v", request)
 	}
 	state := shellState(t, *step.Operation)
+	if state.Phase != operation.ShellPhaseReadOut || state.ProcessGroupID != 0 ||
 		state.PendingExitCode == nil || *state.PendingExitCode != 143 {
 		t.Fatalf("state = %#v", state)
 	}
@@ -175,14 +191,17 @@ func TestShellActorPreservesRecordedProcessWhenFailingRecovery(t *testing.T) {
 	}
 }
 
+func TestShellActorResumesOutputReadWithRecordedExitStatus(t *testing.T) {
 	baseDirectory := t.TempDir()
 	id := operation.ID("shell-resume-exit")
 	directory := filepath.Join(baseDirectory, string(id))
+	createShellArtifacts(t, directory, []byte("out"), []byte("err"))
 	exitCode := 5
 	current := shellOperationWithState(t, id, operation.ShellState{
 		Input:         operation.ShellInput{Shell: testShellPath},
 		BaseDirectory: baseDirectory,
 
+		Phase:           operation.ShellPhaseReadOut,
 		PendingExitCode: &exitCode,
 	})
 
@@ -199,6 +218,7 @@ func TestShellActorRereadsAndReplacesInline(t *testing.T) {
 		baseDirectory := t.TempDir()
 		id := operation.ID("shell-resume-read")
 		directory := filepath.Join(baseDirectory, string(id))
+		createShellArtifacts(t, directory, []byte(output), []byte("error"))
 		exitCode := 4
 		current := shellOperationWithState(t, id, operation.ShellState{
 			Input:           operation.ShellInput{Shell: testShellPath},
@@ -206,6 +226,7 @@ func TestShellActorRereadsAndReplacesInline(t *testing.T) {
 			Phase:           operation.ShellPhaseReadOut,
 			PendingExitCode: &exitCode,
 			InlineOut:       []byte("stale"),
+			InlineOutTail:   []byte("stale tail"),
 		})
 
 		current.MaxOutputLength = 10
@@ -223,6 +244,7 @@ func TestShellActorRereadsAndReplacesInline(t *testing.T) {
 		result := state.Result
 		want := ""
 		if output != "" {
+			want = "prefi...4 bytes truncated; complete output in " + state.OutPath + "...Etail"
 		}
 		if completed.Status != operation.StatusCompleted || result == nil ||
 			result.Out != want || result.OutSize != int64(len(output)) ||
@@ -248,26 +270,31 @@ func TestShellActorResumesEveryReplayablePhase(t *testing.T) {
 	}{
 		{
 			name: "create directory", state: operation.ShellState{Phase: operation.ShellPhaseCreateDirectory},
+			dispatch: primitives.PrimitiveDispatchIOCreate, correlation: "create_directory",
 			kind: primitives.IOCreateDirectory, mode: 0o700,
 		},
 		{
 			name: "create stdout", state: operation.ShellState{Phase: operation.ShellPhaseCreateOut},
+			dispatch: primitives.PrimitiveDispatchIOCreate, correlation: "create_out",
 			artifact: operation.ShellOutFilename, kind: primitives.IOCreateRegularFile, mode: 0o600,
 		},
 		{
 			name: "create stderr", state: operation.ShellState{Phase: operation.ShellPhaseCreateErr},
+			dispatch: primitives.PrimitiveDispatchIOCreate, correlation: "create_err",
 			artifact: operation.ShellErrFilename, kind: primitives.IOCreateRegularFile, mode: 0o600,
 		},
 		{
 			name: "read stdout", state: operation.ShellState{
 				Phase: operation.ShellPhaseReadOut, PendingExitCode: &exitCode, InlineOut: []byte("ou"),
 			},
+			dispatch: primitives.PrimitiveDispatchIORead, correlation: "read_out",
 			artifact: operation.ShellOutFilename, offset: 0, count: 40,
 		},
 		{
 			name: "read stderr", state: operation.ShellState{
 				Phase: operation.ShellPhaseReadErr, PendingExitCode: &exitCode, InlineErr: []byte("err"),
 			},
+			dispatch: primitives.PrimitiveDispatchIORead, correlation: "read_err",
 			artifact: operation.ShellErrFilename, offset: 0, count: 40,
 		},
 	}
@@ -314,6 +341,18 @@ func TestShellActorResumesEveryReplayablePhase(t *testing.T) {
 	}
 }
 
+func TestShellActorRequiresRecordedExitStatus(t *testing.T) {
+	base := t.TempDir()
+	id := operation.ID("missing-exit-status")
+	createShellArtifacts(t, filepath.Join(base, string(id)), nil, nil)
+	current := shellOperationWithState(t, id, operation.ShellState{
+		Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
+		Phase: operation.ShellPhaseReadOut,
+	})
+	failed := runShellActor(t, t.Context(), current)
+	state := shellState(t, failed)
+	if failed.Status != operation.StatusFailed || !strings.Contains(state.TerminalError, "without an exit status") {
+		t.Fatalf("operation = %#v, state = %#v", failed, state)
 	}
 }
 
@@ -674,11 +713,14 @@ func shellState(t *testing.T, current operation.Operation) operation.ShellState 
 	return state
 }
 
+func createShellArtifacts(t *testing.T, directory string, out []byte, errOutput []byte) {
 	t.Helper()
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for name, contents := range map[string][]byte{
+		operation.ShellOutFilename: out,
+		operation.ShellErrFilename: errOutput,
 	} {
 		if err := os.WriteFile(filepath.Join(directory, name), contents, 0o600); err != nil {
 			t.Fatal(err)
@@ -702,11 +744,19 @@ func TestShellReadsActualTailWithBoundedState(t *testing.T) {
 		name, text, want string
 		limit            int
 	}{
+		{"large ASCII", "HEAD" + strings.Repeat("x", 1024*1024) + "TAIL", "HEAD...1048575 bytes truncated...xTAIL", 9},
+		{"four byte characters", strings.Repeat("🙂", 20), "🙂🙂...64 bytes truncated...🙂🙂", 4},
+		{"one four byte character", strings.Repeat("🙂", 20), "...76 bytes truncated...🙂", 1},
+		{"odd Unicode budget", strings.Repeat("🙂", 20), "🙂...68 bytes truncated...🙂🙂", 3},
+		{"split UTF8 boundaries", "界é" + strings.Repeat("🙂", 20) + "好é界", "界é🙂...76 bytes truncated...好é界", 6},
+		{"invalid UTF8", "AB" + strings.Repeat("x", 100) + "\xff\xfeZ", "AB...100 bytes truncated...��Z", 5},
+		{"one character", "start" + strings.Repeat("x", 100) + "end", "...107 bytes truncated...d", 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			base := t.TempDir()
 			id := operation.ID("tail")
 			directory := filepath.Join(base, string(id))
+			createShellArtifacts(t, directory, []byte(test.text), []byte(test.text))
 			exitCode := 0
 			current := shellOperationWithState(t, id, operation.ShellState{
 				Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
@@ -719,6 +769,7 @@ func TestShellReadsActualTailWithBoundedState(t *testing.T) {
 				if len(state.InlineOut)+len(state.InlineOutTail) > 4*test.limit || len(state.InlineErr)+len(state.InlineErrTail) > 4*test.limit {
 					t.Fatal("captured state exceeds its byte budget")
 				}
+				if event.Type == primitives.PrimitiveEventIOReadCompleted && (event.CorrelationID == "read_out_tail" || event.CorrelationID == "read_err_tail") {
 					tailReads++
 				}
 			})
@@ -726,6 +777,8 @@ func TestShellReadsActualTailWithBoundedState(t *testing.T) {
 			if completed.Status != operation.StatusCompleted || state.Result == nil {
 				t.Fatalf("operation failed: %#v", state)
 			}
+			wantOut := strings.Replace(test.want, " bytes truncated...", " bytes truncated; complete output in "+state.OutPath+"...", 1)
+			wantErr := strings.Replace(test.want, " bytes truncated...", " bytes truncated; complete output in "+state.ErrPath+"...", 1)
 			if state.Result.Out != wantOut || state.Result.Err != wantErr || !state.OutTruncated || !state.ErrTruncated || tailReads != 2 {
 				t.Fatalf("output = %q, error = %q, tail reads = %d; want %q", state.Result.Out, state.Result.Err, tailReads, wantOut)
 			}
@@ -741,12 +794,65 @@ func TestShellReadsActualTailWithBoundedState(t *testing.T) {
 	}
 }
 
+func TestShellReadsTailOnlyForStreamsExceedingTheByteBudget(t *testing.T) {
+	for _, test := range []struct {
+		name, out, err, wantOut, wantErr string
+		tailReads                        []primitives.CorrelationID
+	}{
+		{
+			name: "empty", out: "", err: "", wantOut: "", wantErr: "",
+		},
+		{
+			name: "byte budget boundary", out: "abcdefghijklmnop", err: "🙂🙂🙂🙂",
+			wantOut: "ab...12 bytes truncated; complete output in {path}...op", wantErr: "🙂🙂🙂🙂",
+		},
+		{
+			name: "stdout only", out: "abcdefghijklmnopq", err: "err",
+			wantOut: "ab...13 bytes truncated; complete output in {path}...pq", wantErr: "err",
+			tailReads: []primitives.CorrelationID{"read_out_tail"},
+		},
+		{
+			name: "stderr only", out: "界é🙂", err: "abcdefghijklmnopq",
+			wantOut: "界é🙂", wantErr: "ab...13 bytes truncated; complete output in {path}...pq",
+			tailReads: []primitives.CorrelationID{"read_err_tail"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := t.TempDir()
+			id := operation.ID("mixed-output")
+			createShellArtifacts(t, filepath.Join(base, string(id)), []byte(test.out), []byte(test.err))
+			exitCode := 0
+			current := shellOperationWithState(t, id, operation.ShellState{
+				Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
+				Phase: operation.ShellPhaseReadOut, PendingExitCode: &exitCode,
+			})
+			current.MaxOutputLength = 4
+			var tailReads []primitives.CorrelationID
+			completed := runShellActorObserved(t, t.Context(), current, func(_ operation.Operation, event primitives.PrimitiveEvent) {
+				if event.Type == primitives.PrimitiveEventIOReadCompleted && (event.CorrelationID == "read_out_tail" || event.CorrelationID == "read_err_tail") {
+					tailReads = append(tailReads, event.CorrelationID)
+				}
+			})
+			state := shellState(t, completed)
+			if completed.Status != operation.StatusCompleted || state.Result == nil {
+				t.Fatalf("operation failed: %#v", state)
+			}
+			wantOut := strings.ReplaceAll(test.wantOut, "{path}", state.OutPath)
+			wantErr := strings.ReplaceAll(test.wantErr, "{path}", state.ErrPath)
+			if state.Result.Out != wantOut || state.Result.Err != wantErr || !slices.Equal(tailReads, test.tailReads) {
+				t.Fatalf("output = %q, error = %q, tail reads = %v; want %q, %q, %v", state.Result.Out, state.Result.Err, tailReads, wantOut, wantErr, test.tailReads)
+			}
+		})
+	}
+}
+
 func TestShellRereadsAndReplacesTail(t *testing.T) {
 	text := "HEAD" + strings.Repeat("x", 100) + "TAIL!"
 	for _, phase := range []operation.ShellPhase{operation.ShellPhaseReadOutTail, operation.ShellPhaseReadErrTail} {
 		t.Run(string(phase), func(t *testing.T) {
 			base := t.TempDir()
 			id := operation.ID("resume-tail")
+			createShellArtifacts(t, filepath.Join(base, string(id)), []byte(text), []byte(text))
 			exitCode := 0
 			state := operation.ShellState{
 				Input: operation.ShellInput{Shell: testShellPath}, BaseDirectory: base,
@@ -771,6 +877,7 @@ func TestShellRereadsAndReplacesTail(t *testing.T) {
 			}
 			completed := runShellActor(t, t.Context(), *step.Operation)
 			result := shellState(t, completed).Result
+			if completed.Status != operation.StatusCompleted || result == nil || result.Out != "HEADx...99 bytes truncated; complete output in "+shellState(t, completed).OutPath+"...TAIL!" || result.Err != "HEADx...99 bytes truncated; complete output in "+shellState(t, completed).ErrPath+"...TAIL!" {
 				t.Fatalf("result after resume = %#v", result)
 			}
 		})
@@ -795,12 +902,14 @@ func TestShellRejectsInvalidTailEvents(t *testing.T) {
 			current := shellOperationWithState(t, "invalid-tail", state)
 			current.MaxOutputLength = 10
 			event := test.event
+			event.Source, event.CorrelationID = "invalid-tail", "read_out_tail"
 			shell, err := operation.NewShell(current)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if test.name == "changed size" {
 				if _, err := shell.Handle(&primitives.PrimitiveEvent{
+					Source: "invalid-tail", CorrelationID: "read_out_tail", Type: primitives.PrimitiveEventIOReadOutput,
 					Result: primitives.IOReadOutputResult{Offset: 80, Data: bytes.Repeat([]byte("t"), 20)},
 				}); err != nil {
 					t.Fatal(err)

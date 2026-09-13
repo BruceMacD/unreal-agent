@@ -14,7 +14,10 @@ import (
 
 const (
 	TypeShell    Type    = "shell"
+	VersionShell Version = 3
 
+	ShellOutFilename = "out"
+	ShellErrFilename = "err"
 )
 
 type ShellPhase string
@@ -127,6 +130,7 @@ func (shell *Shell) Handle(event *primitives.PrimitiveEvent) (Step, error) {
 		if pathErr != nil {
 			return shell.fail(pathErr)
 		}
+		return shell.next(ShellPhaseCreateDirectory, paths)
 
 	case StatusAwaiting:
 		if event == nil {
@@ -201,17 +205,40 @@ func (shell *Shell) resume() (Step, error) {
 	if err != nil {
 		return shell.fail(err)
 	}
+	shell.chunks, shell.readSize = nil, 0
+	return shell.dispatchPhase(paths)
+}
+
+func (shell *Shell) next(phase ShellPhase, paths shellPaths) (Step, error) {
+	shell.state.Phase = phase
+	return shell.dispatchPhase(paths)
+}
+
+func (shell *Shell) dispatchPhase(paths shellPaths) (Step, error) {
+	current, state := &shell.current, &shell.state
+	correlation := primitives.CorrelationID(state.Phase)
 
 	switch state.Phase {
 	case ShellPhaseCreateDirectory:
 		return shell.dispatch(createShellPath(
 			current.ID,
+			correlation,
 			primitives.IOCreateDirectory,
 			paths.directory,
 			0o700,
 		))
 	case ShellPhaseCreateOut:
+		return shell.dispatch(createShellFile(current.ID, correlation, paths.out))
 	case ShellPhaseCreateErr:
+		return shell.dispatch(createShellFile(current.ID, correlation, paths.err))
+	case ShellPhaseProcess:
+		return shell.dispatch(startShellProcess(current.ID, *state, paths))
+	case ShellPhaseReadOut, ShellPhaseReadErr, ShellPhaseReadOutTail, ShellPhaseReadErrTail:
+		request, err := shell.readRequest(paths)
+		if err != nil {
+			return shell.fail(err)
+		}
+		return shell.dispatch(PrimitiveDispatch{Type: primitives.PrimitiveDispatchIORead, Data: request})
 	default:
 		return shell.fail(fmt.Errorf("shell operation has invalid phase %q", state.Phase))
 	}
@@ -233,16 +260,22 @@ func (shell *Shell) handleAwaiting(event primitives.PrimitiveEvent) (Step, error
 	if event.Type == primitives.PrimitiveEventFailed {
 		return shell.fail(shellPrimitiveFailure(event))
 	}
+	if err := validateShellCorrelation(event, primitives.CorrelationID(state.Phase)); err != nil {
+		return shell.fail(err)
+	}
 	paths, err := newShellPaths(state.BaseDirectory, current.ID)
 	if err != nil {
 		return shell.fail(err)
 	}
 
 	switch state.Phase {
+	case ShellPhaseCreateDirectory, ShellPhaseCreateOut, ShellPhaseCreateErr:
+		return shell.created(event, paths)
 
 	case ShellPhaseProcess:
 		return shell.processEvent(event, paths)
 
+	case ShellPhaseReadOut, ShellPhaseReadErr, ShellPhaseReadOutTail, ShellPhaseReadErrTail:
 		return shell.readEvent(event, paths)
 
 	default:
@@ -250,13 +283,26 @@ func (shell *Shell) handleAwaiting(event primitives.PrimitiveEvent) (Step, error
 	}
 }
 
+func (shell *Shell) created(event primitives.PrimitiveEvent, paths shellPaths) (Step, error) {
 	state := &shell.state
+	kind := primitives.IOCreateRegularFile
+	if state.Phase == ShellPhaseCreateDirectory {
+		kind = primitives.IOCreateDirectory
 	}
+	if err := validateShellCreate(event, kind); err != nil {
 		return shell.fail(err)
 	}
 	switch state.Phase {
+	case ShellPhaseCreateDirectory:
+		return shell.next(ShellPhaseCreateOut, paths)
 	case ShellPhaseCreateOut:
+		state.OutPath = paths.out
+		return shell.next(ShellPhaseCreateErr, paths)
 	case ShellPhaseCreateErr:
+		state.ErrPath = paths.err
+		return shell.next(ShellPhaseProcess, paths)
+	default:
+		return shell.fail(fmt.Errorf("shell operation has invalid create phase %q", state.Phase))
 	}
 }
 
@@ -280,6 +326,7 @@ func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPat
 		exitCode := shellExitStatus(exit)
 		state.ProcessGroupID = 0
 		state.PendingExitCode = &exitCode
+		return shell.next(ShellPhaseReadOut, paths)
 
 	case primitives.PrimitiveEventProcessOutput:
 		return shell.fail(errors.New("captured shell process produced an unexpected output event"))
@@ -292,39 +339,114 @@ func (shell *Shell) processEvent(event primitives.PrimitiveEvent, paths shellPat
 	}
 }
 
+func (shell *Shell) readRequest(paths shellPaths) (primitives.IOReadRequest, error) {
 	current, state := &shell.current, &shell.state
+	request := primitives.IOReadRequest{
+		Source:        primitives.SourceID(current.ID),
+		CorrelationID: primitives.CorrelationID(state.Phase),
+		Count:         current.shellReadLimit(),
+	}
+	var size int64
 	switch state.Phase {
 	case ShellPhaseReadOut, ShellPhaseReadOutTail:
+		request.Path, size = paths.out, state.OutSize
 	case ShellPhaseReadErr, ShellPhaseReadErrTail:
+		request.Path, size = paths.err, state.ErrSize
 	default:
+		return primitives.IOReadRequest{}, fmt.Errorf("shell operation has invalid read phase %q", state.Phase)
 	}
+	if state.Phase == ShellPhaseReadOutTail || state.Phase == ShellPhaseReadErrTail {
+		if size <= current.shellReadLimit() {
+			return primitives.IOReadRequest{}, errors.New("invalid shell tail read size")
+		}
+		request.Count = current.shellTailReadLimit()
+		request.Offset = size - request.Count
+	}
+	return request, nil
 }
 
+func (shell *Shell) readEvent(event primitives.PrimitiveEvent, paths shellPaths) (Step, error) {
+	request, err := shell.readRequest(paths)
+	if err != nil {
+		return shell.fail(err)
+	}
+	readSize := shell.readSize
 	switch event.Type {
 	case primitives.PrimitiveEventIOReadOutput:
+		output, ok := event.Result.(primitives.IOReadOutputResult)
+		if !ok || output.Offset != request.Offset+readSize {
+			return shell.fail(errors.New("shell read returned invalid output"))
 		}
+		if int64(len(output.Data)) > request.Count-readSize {
+			return shell.fail(errors.New("shell read exceeded its configured limit"))
+		}
+		shell.chunks = append(shell.chunks, output.Data)
+		shell.readSize += int64(len(output.Data))
+		return Step{}, nil
 
 	case primitives.PrimitiveEventIOReadCompleted:
 		result, ok := event.Result.(primitives.IOReadCompletedResult)
+		if !ok || result.Size < request.Offset || readSize != min(request.Count, result.Size-request.Offset) {
+			return shell.fail(errors.New("shell read returned an invalid completion"))
 		}
+		if shell.state.Phase == ShellPhaseReadOutTail || shell.state.Phase == ShellPhaseReadErrTail {
+			if result.Size != request.Offset+request.Count {
+				return shell.fail(errors.New("shell capture size changed while reading its tail"))
+			}
+		}
+		data := bytes.Join(shell.chunks, nil)
 		shell.chunks, shell.readSize = nil, 0
+		return shell.readCompleted(data, result.Size, paths)
 
 	default:
+		return shell.fail(fmt.Errorf("shell read returned unexpected event %q", event.Type))
 	}
 }
 
+func (shell *Shell) readCompleted(data []byte, size int64, paths shellPaths) (Step, error) {
+	current, state := &shell.current, &shell.state
+	needsTail := size > current.shellReadLimit()
+	if needsTail && (state.Phase == ShellPhaseReadOut || state.Phase == ShellPhaseReadErr) {
+		data = data[:current.shellReadLimit()-current.shellTailReadLimit()]
 	}
+	switch state.Phase {
+	case ShellPhaseReadOut:
+		state.InlineOut, state.OutSize, state.InlineOutTail = data, size, nil
+		if needsTail {
+			return shell.next(ShellPhaseReadOutTail, paths)
+		}
+		return shell.next(ShellPhaseReadErr, paths)
+	case ShellPhaseReadOutTail:
+		state.InlineOutTail = data
+		return shell.next(ShellPhaseReadErr, paths)
+	case ShellPhaseReadErr:
+		state.InlineErr, state.ErrSize, state.InlineErrTail = data, size, nil
+		if needsTail {
+			return shell.next(ShellPhaseReadErrTail, paths)
+		}
+		return shell.finish(paths)
+	case ShellPhaseReadErrTail:
+		state.InlineErrTail = data
+		return shell.finish(paths)
+	default:
+		return shell.fail(fmt.Errorf("shell operation has invalid read phase %q", state.Phase))
 	}
 }
 
+func (shell *Shell) finish(paths shellPaths) (Step, error) {
 	current, state := &shell.current, &shell.state
 
+	if state.PendingExitCode == nil {
 		return shell.fail(errors.New("shell execution completed without an exit status"))
 	}
 	state.Result = &ShellResult{
 		OutSize:  state.OutSize,
 		ErrSize:  state.ErrSize,
+		ExitCode: *state.PendingExitCode,
 	}
+	state.Result.Out, state.OutTruncated = boundOutput(string(state.InlineOut), string(state.InlineOutTail), state.OutSize, current.MaxOutputLength, paths.out)
+	state.Result.Err, state.ErrTruncated = boundOutput(string(state.InlineErr), string(state.InlineErrTail), state.ErrSize, current.MaxOutputLength, paths.err)
+	state.OutPath, state.ErrPath = paths.out, paths.err
 	state.PendingExitCode = nil
 	state.InlineOut = nil
 	state.InlineErr = nil
@@ -399,6 +521,7 @@ func startShellProcess(id ID, state ShellState, paths shellPaths) PrimitiveDispa
 		Type: primitives.PrimitiveDispatchProcessStart,
 		Data: primitives.ProcessStartRequest{
 			Source:        primitives.SourceID(id),
+			CorrelationID: primitives.CorrelationID(ShellPhaseProcess),
 			Path:          state.Input.Shell,
 			Arguments:     []string{"-c", state.Input.Command},
 			Directory:     state.Input.Directory,
@@ -428,6 +551,7 @@ func validateShellCorrelation(event primitives.PrimitiveEvent, correlation primi
 
 func validateShellCreate(event primitives.PrimitiveEvent, kind primitives.IOCreateKind) error {
 	result, ok := event.Result.(primitives.IOCreateResult)
+	if event.Type != primitives.PrimitiveEventIOCreateCompleted || !ok || result.Kind != kind {
 		return errors.New("create shell artifact returned an invalid result")
 	}
 	return nil

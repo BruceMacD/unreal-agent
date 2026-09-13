@@ -13,6 +13,7 @@ import (
 )
 
 func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
+	for _, phase := range []ShellPhase{ShellPhaseReadOut, ShellPhaseReadErr, ShellPhaseReadOutTail, ShellPhaseReadErrTail} {
 		t.Run(string(phase), func(t *testing.T) {
 			exitCode := 0
 			state := ShellState{
@@ -103,8 +104,23 @@ func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
 			}
 			switch phase {
 			case ShellPhaseReadOut:
+				if !bytes.Equal(assembled.InlineOut, contents) {
+					t.Fatalf("assembled stdout = %q, want %q", assembled.InlineOut, contents)
+				}
 			case ShellPhaseReadOutTail:
+				if !bytes.Equal(assembled.InlineOutTail, contents) {
+					t.Fatalf("assembled stdout tail = %q, want %q", assembled.InlineOutTail, contents)
+				}
+			case ShellPhaseReadErr, ShellPhaseReadErrTail:
 				if finished.Operation.Status != StatusCompleted || assembled.Result == nil || assembled.Result.ExitCode != 0 {
+					t.Fatal("stderr read did not complete the operation")
+				}
+				want := "abc...6 bytes truncated; complete output in " + request.Path + "...jkl"
+				if phase == ShellPhaseReadErrTail {
+					want = "hhh...94 bytes truncated; complete output in " + request.Path + "...jkl"
+				}
+				if assembled.Result.Err != want || len(assembled.InlineErr)+len(assembled.InlineErrTail) != 0 {
+					t.Fatalf("assembled stderr = %q, want %q and no retained buffers", assembled.Result.Err, want)
 				}
 			}
 			replayed, err := recovered.Handle(completion)
@@ -116,6 +132,7 @@ func TestShellReadChunksAreTransientAndRecoveryRereads(t *testing.T) {
 }
 
 func TestShellReadValidatesChunksAndDiscardsThemOnTermination(t *testing.T) {
+	for _, scenario := range []string{"wrong source", "wrong correlation", "wrong offset", "oversized", "invalid payload", "incomplete read", "invalid completion", "canceled", "failed"} {
 		t.Run(scenario, func(t *testing.T) {
 			encoded, err := json.Marshal(ShellState{
 				Input: ShellInput{Shell: "/bin/sh"}, BaseDirectory: t.TempDir(), Phase: ShellPhaseReadOut,
@@ -136,6 +153,7 @@ func TestShellReadValidatesChunksAndDiscardsThemOnTermination(t *testing.T) {
 				t.Fatal("read start has no checkpoint")
 			}
 			event := primitives.PrimitiveEvent{
+				Type: primitives.PrimitiveEventIOReadOutput, Source: "shell", CorrelationID: "read_out",
 				Result: primitives.IOReadOutputResult{Offset: 0, Data: []byte("ab")},
 			}
 			if step, err := execution.Handle(&event); step.Operation != nil || err != nil {
@@ -146,12 +164,17 @@ func TestShellReadValidatesChunksAndDiscardsThemOnTermination(t *testing.T) {
 			case "wrong source":
 				event.Source = "other"
 			case "wrong correlation":
+				event.CorrelationID = "read_err"
 			case "wrong offset":
 				event.Result = primitives.IOReadOutputResult{Offset: 0, Data: []byte("c")}
 			case "oversized":
 				event.Result = primitives.IOReadOutputResult{Offset: 2, Data: []byte(strings.Repeat("c", 11))}
 			case "invalid payload":
 				event.Result = "invalid"
+			case "incomplete read":
+				event.Type, event.Result = primitives.PrimitiveEventIOReadCompleted, primitives.IOReadCompletedResult{Size: 3}
+			case "invalid completion":
+				event.Type, event.Result = primitives.PrimitiveEventIOReadCompleted, "invalid"
 			case "canceled":
 				event.Type, event.Result = primitives.PrimitiveEventCanceled, nil
 			case "failed":

@@ -204,6 +204,7 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 		truncated             bool
 	}{
 		{"default limit", `{"command":"printf hello"}`, "hello", false},
+		{"requested limit", `{"command":"printf hello","max_output_length":3}`, "h...2 bytes truncated; complete output in {path}...lo", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeClient{}

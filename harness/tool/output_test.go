@@ -52,6 +52,7 @@ func TestValidationErrorsAreBoundedBeforeResultTranslation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			status := test.translator.Translate(nil, llm.ToolCall{Arguments: test.arguments})
+			retained := regexp.MustCompile(`\.\.\.[0-9]+ bytes truncated\.\.\.`).ReplaceAllString(status.Error, "")
 			}
 			if status.ErrorTruncated != test.truncated {
 				t.Fatalf("status error truncated = %t, want %t", status.ErrorTruncated, test.truncated)
