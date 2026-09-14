@@ -768,6 +768,7 @@ func terminateProcess(
 ) error {
 	termErr := signalProcessInvocation(process, syscall.SIGTERM)
 	exited, waitErr := waitForProcessInvocation(process, gracePeriod)
+	// Unlike Darwin's exiting-member check, this forgives EPERM only after confirmed completion.
 	if exited && errors.Is(termErr, syscall.EPERM) {
 		termErr = nil
 	}
@@ -780,6 +781,7 @@ func terminateProcess(
 
 func signalProcessInvocation(process *os.Process, signal syscall.Signal) error {
 	err := syscall.Kill(-process.Pid, signal)
+	err = normalizeProcessGroupSignalError(process.Pid, err)
 	if err == nil {
 		return nil
 	}
