@@ -46,7 +46,15 @@ class Model(BaseHTTPRequestHandler):
                 "total_tokens": 13,
             },
         }
+        if request.get("stream"):
+            event = {"type": "response.completed", "response": response}
+            body = f"event: response.completed\ndata: {json.dumps(event)}\n\n".encode()
+            content_type = "text/event-stream"
+        else:
+            body = json.dumps(response).encode()
+            content_type = "application/json"
         self.send_response(200)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

@@ -1248,6 +1248,7 @@ func TestRemoteRetryDelayIsExponentialAndBounded(t *testing.T) {
 	wants := []time.Duration{2 * time.Second, 4 * time.Second, 5 * time.Second, 5 * time.Second}
 	for index, want := range wants {
 		failedAttempts := index + 1
+		if got := policy.Backoff(failedAttempts); got != want {
 			t.Fatalf("delay after %d failures = %s, want %s", failedAttempts, got, want)
 		}
 	}
@@ -1472,4 +1473,68 @@ func remoteTestClient(body io.ReadCloser) *http.Client {
 			Body:       body,
 		}, nil
 	})}
+}
+
+func TestRemoteSSEContentTypeSelection(t *testing.T) {
+	for _, test := range []struct {
+		name, contentType  string
+		status             int
+		requestSSE, framed bool
+	}{
+		{name: "missing", requestSSE: true, framed: true},
+		{name: "missing 299", status: 299, requestSSE: true, framed: true},
+		{name: "missing 300", status: 300, requestSSE: true},
+		{name: "missing 401", status: 401, requestSSE: true},
+		{name: "missing 503", status: 503, requestSSE: true},
+		{name: "SSE", contentType: "text/event-stream", requestSSE: true, framed: true},
+		{name: "SSE parameters", contentType: "text/event-stream; charset=utf-8", requestSSE: true, framed: true},
+		{name: "SSE case", contentType: "Text/Event-Stream", requestSSE: true, framed: true},
+		{name: "JSON", contentType: "application/json", requestSSE: true},
+		{name: "text", contentType: "text/plain", requestSSE: true},
+		{name: "malformed", contentType: "text/event-stream; broken", requestSSE: true},
+		{name: "missing without opt-in"},
+		{name: "SSE without opt-in", contentType: "text/event-stream"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const body = "data: first\r\n\r\ndata: second\n\nunfinished"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if test.contentType == "" {
+					w.Header()["Content-Type"] = nil // Disable net/http's content sniffing.
+				} else {
+					w.Header().Set("Content-Type", test.contentType)
+				}
+				if test.status != 0 {
+					w.WriteHeader(test.status)
+				}
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+			request := DefaultRemoteRequest("test", "content-type", server.URL)
+			request.RetryPolicy.MaxAttempts = 1
+			if test.requestSSE {
+				request.SSE = &RemoteSSEOptions{MaxFrameSize: 1024, FrameDelimiter: SSEFrameDelimiterStrip}
+			}
+			events := collectInternalEvents(sendTestRemoteRequest(t, t.Context(), request))
+			started := remoteEventsOfType(events, PrimitiveEventRemoteResponseStarted)[0].Result.(RemoteResponseStartedResult)
+			if http.Header(started.Headers).Get("Content-Type") != test.contentType {
+				t.Fatal("unexpected test response content type")
+			}
+			if test.framed {
+				outputs := remoteEventsOfType(events, PrimitiveEventRemoteOutput)
+				if len(outputs) != 2 {
+					t.Fatalf("frames = %d", len(outputs))
+				}
+				for i, want := range []string{"data: first", "data: second"} {
+					if got := string(outputs[i].Result.(RemoteOutputResult).Data); got != want {
+						t.Fatalf("frame %d = %q, want %q", i, got, want)
+					}
+				}
+			} else if got := string(remoteAttemptOutput(t, events, 1)); got != body {
+				t.Fatalf("raw body = %q", got)
+			}
+			if events[len(events)-1].Type != PrimitiveEventRemoteCompleted {
+				t.Fatal("request did not complete")
+			}
+		})
+	}
 }

@@ -54,6 +54,7 @@ type Config struct {
 	CacheKeyPlacement CacheKeyPlacement
 	// Nil uses DefaultMaxAttempts.
 	MaxAttempts *int
+	// Trace borrows read-only bodies: request JSON and terminal response JSON or HTTP error.
 	Trace func(Exchange)
 }
 
@@ -131,10 +132,17 @@ func (adapter *adapter) remoteRequest(body []byte, cacheKey string) primitives.R
 		}
 		request.Headers[name] = values
 	}
+	request.Headers["Accept"] = []string{"text/event-stream"}
 	if adapter.cacheKeyPlacement.Header != "" && cacheKey != "" {
 		request.Headers[adapter.cacheKeyPlacement.Header] = []string{cacheKey}
 	}
+	// Reasoning can produce multi-minute gaps between events.
 	request.ResponseIdleTimeout = modelResponseIdleTimeout
+	request.RetryPolicy.MaxAttempts = 1
+	request.SSE = &primitives.RemoteSSEOptions{
+		MaxFrameSize:   maxSSEFrameBytes,
+		FrameDelimiter: primitives.SSEFrameDelimiterStrip,
+	}
 	return request
 }
 
@@ -147,6 +155,7 @@ func providerError(statusCode int, body []byte) *APIError {
 			Type    string  `json:"type"`
 		} `json:"error"`
 	}
+	if err := json.Unmarshal(body, &envelope); err == nil && (envelope.Error.Message != "" || dereference(envelope.Error.Code) != "") {
 		return &APIError{
 			StatusCode: statusCode,
 			Code:       dereference(envelope.Error.Code),

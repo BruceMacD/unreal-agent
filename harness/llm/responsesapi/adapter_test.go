@@ -37,12 +37,14 @@ func TestAdapterRemoteRequestsUseUUIDCorrelationIDs(t *testing.T) {
 func TestAdapterResponds(t *testing.T) {
 	requestBody := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assertRequest(t, request, "text/event-stream")
 		var body map[string]any
 		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requestBody <- body
 
+		writeStreamResponse(t, writer, `{
 			"id":"resp-1",
 			"object":"response",
 			"status":"completed",
@@ -62,6 +64,8 @@ func TestAdapterResponds(t *testing.T) {
 		t.Fatalf("respond: %v", err)
 	}
 	gotRequestBody := <-requestBody
+	if gotRequestBody["stream"] != true {
+		t.Fatal("request must enable streaming")
 	}
 	assertRequestBody(t, gotRequestBody)
 
@@ -291,6 +295,7 @@ func TestResponseRejectsUnsupportedOutput(t *testing.T) {
 
 func TestAdapterTracesProviderExchange(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writeStreamResponse(t, writer, `{"id":"resp-1","status":"completed","output":[],"usage":{}}`)
 	}))
 	defer server.Close()
 
@@ -463,6 +468,7 @@ func assertRequestBody(t *testing.T, got map[string]any) {
 	t.Helper()
 	wantJSON := `{
 		"max_output_tokens":128,
+		"stream":true,
 		"store":false,
 		"include":["reasoning.encrypted_content"],
 		"input":[
@@ -510,6 +516,9 @@ func waitForSignal(t *testing.T, signal <-chan struct{}, failure string) {
 func TestAdapterModelRequestsUseTheModelIdleBound(t *testing.T) {
 	adapter := newTestAdapter(t, "http://example.invalid/responses").(*adapter)
 	request := adapter.remoteRequest(nil, "")
+	if request.ResponseIdleTimeout != modelResponseIdleTimeout || request.RetryPolicy.MaxAttempts != 1 ||
+		request.SSE == nil || request.SSE.MaxFrameSize != maxSSEFrameBytes ||
+		request.SSE.FrameDelimiter != primitives.SSEFrameDelimiterStrip || request.Headers["Accept"][0] != "text/event-stream" {
 		t.Fatalf("remote request = %#v", request)
 	}
 }
@@ -573,6 +582,7 @@ func TestAdapterCacheKeyPlacement(t *testing.T) {
 				if got := request.Header.Get("X-Test"); got != "kept" {
 					t.Errorf("%s: X-Test = %q, want kept", caseName, got)
 				}
+				writeStreamResponse(t, writer, `{"id":"resp-1","status":"completed","output":[],"usage":{}}`)
 			}))
 			t.Cleanup(server.Close)
 			remote := primitives.NewRemoteClient()
@@ -604,5 +614,42 @@ func TestAdapterCacheKeyPlacement(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func writeStreamResponse(t *testing.T, writer http.ResponseWriter, response string) {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Type     string         `json:"type"`
+		Response jsontext.Value `json:"response"`
+	}{Type: "response.completed", Response: jsontext.Value(response)})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	if _, err := io.WriteString(writer, "data: "+string(body)+"\n\n"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestHeaderlessHTTPErrorPreservesDetails(t *testing.T) {
+	const body = `{"error":{"code":"invalid_token","message":"Token expired; renew credentials.","type":"authentication_error","param":null}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header()["Content-Type"] = nil
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+	var traced Exchange
+	adapter := newTestAdapterWithConfig(t, Config{Endpoint: server.URL, Trace: func(exchange Exchange) { traced = exchange }})
+	_, err := adapter.Respond(t.Context(), validRequest(), llm.RequestOptions{})
+	apiError, ok := errors.AsType[*APIError](err)
+	if !ok || apiError.StatusCode != 401 || apiError.Code != "invalid_token" ||
+		apiError.Message != "Token expired; renew credentials." || apiError.Type != "authentication_error" {
+		t.Fatalf("error details lost: %v", err)
+	}
+	if traced.StatusCode != 401 || string(traced.ResponseBody) != body {
+		t.Fatalf("error body lost: %#v", traced)
 	}
 }

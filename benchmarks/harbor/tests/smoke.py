@@ -61,6 +61,7 @@ def smoke(bundle: Path) -> None:
             .read_text()
             .splitlines()
         ]
+        assert requests and all(request.get("stream") is True for request in requests)
         assert exported == observed, (exported, observed)
         assert len([s for s in trajectory.steps if s.source == "user"]) == 1
         metrics = result["agent_result"]

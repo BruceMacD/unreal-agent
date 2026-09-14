@@ -54,6 +54,11 @@ type Client interface {
 }
 
 type Provider struct {
+	Name              string
+	BaseURL           string
+	DefaultModel      string
+	APIKeyEnvironment string // Empty delegates authentication to NewClient.
+	NewClient         func(apiKey, baseURL string, maxAttempts int, getenv func(string) string) (Client, error)
 }
 
 }
@@ -193,7 +198,21 @@ func Run(
 	if model == "" {
 		return fmt.Errorf("model must be set in the request or %s", llmModelEnvironment)
 	}
+	var apiKey string
+	if selected.APIKeyEnvironment != "" {
+		apiKey = getenv(llmAPIKeyEnvironment)
+		if strings.TrimSpace(apiKey) == "" {
+			apiKey = getenv(selected.APIKeyEnvironment)
+		}
+		if strings.TrimSpace(apiKey) == "" {
+			return fmt.Errorf(
+				"%s or %s must be set",
+				llmAPIKeyEnvironment,
+				selected.APIKeyEnvironment,
+			)
+		}
 	}
+	client, err := selected.NewClient(apiKey, configuredBaseURL, maxAttempts, getenv)
 	if err != nil {
 		return fmt.Errorf("create %s client: %w", selected.Name, err)
 	}

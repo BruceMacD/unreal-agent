@@ -27,6 +27,8 @@ func TestAdapterRetryConfiguration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := newTestAdapterWithConfig(t, Config{Endpoint: "https://example.com/responses", MaxAttempts: test.limit}).(*adapter)
 			policy := client.remoteRequest(nil, "").RetryPolicy
+			if client.maxAttempts != test.attempts || policy.MaxAttempts != 1 {
+				t.Fatalf("exchange attempts = %d, request default attempts = %d", client.maxAttempts, policy.MaxAttempts)
 			}
 		})
 	}
@@ -88,12 +90,15 @@ func TestAdapterRetriesTransientFailures(t *testing.T) {
 							t.Error(err)
 						}
 					case "partial response":
+						writer.Header().Set("Content-Type", "text/event-stream")
 						writer.Header().Set("Content-Length", "4096")
+						if _, err := io.WriteString(writer, `data: {"type":"response.created","response":{"id":"discard-this-partial-response",`); err != nil {
 							t.Error(err)
 						}
 					}
 					return
 				}
+				writeStreamResponse(t, writer, `{"id":"recovered","status":"completed","output":[],"usage":{}}`)
 			}))
 			defer server.Close()
 			client := newTestAdapterWithConfig(t, Config{Endpoint: server.URL, MaxAttempts: new(2)})

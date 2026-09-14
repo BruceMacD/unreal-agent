@@ -40,6 +40,10 @@ func TestRunnerProviderRetries(t *testing.T) {
 							return provider.Name
 						case "UNREAL_HARNESS_LLM_BASE_URL":
 							return server.URL
+						case "OPENAI_CODEX_ACCESS_TOKEN":
+							return "subscription-token"
+						case "OPENAI_CODEX_ACCOUNT_ID":
+							return "account-1"
 						case "UNREAL_HARNESS_LLM_API_KEY":
 							return "test-key"
 						default:
@@ -63,5 +67,38 @@ func TestRunnerProviderDefaultModels(t *testing.T) {
 		if provider.DefaultModel != want {
 			t.Errorf("%s default model = %q, want %q", provider.Name, provider.DefaultModel, want)
 		}
+	}
+}
+
+func TestRunnerCodexUsesSubscriptionWithoutAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer subscription-token" || r.Header.Get("ChatGPT-Account-ID") != "account" {
+			t.Error("wrong authentication")
+		}
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.UnmarshalRead(r.Body, &body); err != nil {
+			t.Error(err)
+		}
+		if !body.Stream {
+			t.Errorf("body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"subscription works\"}]}]}}\n\n")
+	}))
+	defer server.Close()
+	var output, stderr strings.Builder
+		return map[string]string{
+			"UNREAL_HARNESS_LLM_PROVIDER": "openai-codex",
+			"UNREAL_HARNESS_LLM_BASE_URL": server.URL,
+			"OPENAI_CODEX_ACCESS_TOKEN":   "subscription-token",
+			"OPENAI_CODEX_ACCOUNT_ID":     "account",
+		}[key]
+	if code != 0 || !strings.Contains(output.String(), "subscription works") {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	if strings.Contains(output.String(), "subscription-token") {
+		t.Fatal("credential leaked into session output")
 	}
 }

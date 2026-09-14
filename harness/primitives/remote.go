@@ -252,6 +252,7 @@ func runRemoteRequest(
 			)
 			return
 		}
+		delay := request.RetryPolicy.Backoff(attempt)
 		if !sendRemoteEvent(ctx, events, remoteRetryScheduled(request, attempt, attemptErr, delay)) {
 			sendRemoteTerminalEvent(events, remoteCanceled(request))
 			return
@@ -288,7 +289,12 @@ func streamRemoteResponse(
 
 	frameSSE := false
 	if request.SSE != nil {
+		contentType := response.Header.Get("Content-Type")
+		mediaType, _, err := mime.ParseMediaType(contentType)
 		frameSSE = err == nil && mediaType == "text/event-stream"
+		if contentType == "" {
+			frameSSE = response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+		}
 	}
 	var sseFramer *remoteSSEFramer
 	if frameSSE {
@@ -549,6 +555,7 @@ func isRetryableRemoteError(err error) bool {
 		errors.Is(err, syscall.ETIMEDOUT)
 }
 
+func (policy RemoteRetryPolicy) Backoff(failedAttempts int) time.Duration {
 	delay := policy.InitialBackoff
 	for range failedAttempts - 1 {
 		if delay >= policy.MaxBackoff || delay > policy.MaxBackoff-delay {

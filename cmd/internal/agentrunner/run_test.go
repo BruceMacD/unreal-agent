@@ -140,6 +140,50 @@ description: Review code.
 	}
 }
 
+func TestRunMainUsesProviderAuthenticationConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name, keyEnvironment, genericKey, providerKey, wantKey string
+		wantError                                              bool
+	}{
+		{name: "provider key", keyEnvironment: "CUSTOM_CREDENTIAL", providerKey: "provider-secret", wantKey: "provider-secret"},
+		{name: "generic key takes precedence", keyEnvironment: "CUSTOM_CREDENTIAL", genericKey: "generic-secret", providerKey: "provider-secret", wantKey: "generic-secret"},
+		{name: "delegated authentication ignores API keys", genericKey: "generic-secret", providerKey: "provider-secret"},
+		{name: "missing required key", keyEnvironment: "CUSTOM_CREDENTIAL", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{respond: func(context.Context, llm.Request) (llm.Response, error) {
+				return llm.Response{ID: "response-1", Stop: llm.StopComplete}, nil
+			}}
+			created := false
+			providers := []Provider{{
+				Name: "custom", DefaultModel: "test-model", APIKeyEnvironment: test.keyEnvironment,
+				NewClient: func(apiKey, _ string, _ int, _ func(string) string) (Client, error) {
+					created = true
+					if apiKey != test.wantKey {
+						return nil, errors.New("unexpected API key")
+					}
+					return client, nil
+				},
+			}}
+			var stderr strings.Builder
+			code := RunMain(t.Context(), []string{"-workspace", t.TempDir(), "-session-directory", t.TempDir()}, func(name string) string {
+				return map[string]string{
+					llmProviderEnvironment: "custom",
+					llmAPIKeyEnvironment:   test.genericKey,
+					"CUSTOM_CREDENTIAL":    test.providerKey,
+					"CUSTOM_API_KEY":       "must-not-use",
+				}[name]
+			if test.wantError {
+				if code != 1 || created || !strings.Contains(stderr.String(), test.keyEnvironment) {
+					t.Fatalf("exit = %d, client created = %v, stderr = %s", code, created, stderr.String())
+				}
+			} else if code != 0 || !created {
+				t.Fatalf("exit = %d, client created = %v, stderr = %s", code, created, stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 	client := &fakeClient{respond: func(_ context.Context, request llm.Request) (llm.Response, error) {
 		if request.Model.ID != "environment-model" {
@@ -150,11 +194,16 @@ func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 	selected := false
 	providers := []Provider{
 		{
+			Name:              "openai",
+			APIKeyEnvironment: "OPENAI_API_KEY",
+			NewClient: func(_ string, _ string, _ int, _ func(string) string) (Client, error) {
 				return nil, errors.New("default provider selected")
 			},
 		},
 		{
 			Name: "openrouter", BaseURL: "https://default.example/v1", DefaultModel: "router-model",
+			APIKeyEnvironment: "OPENROUTER_API_KEY",
+			NewClient: func(apiKey, baseURL string, maxAttempts int, _ func(string) string) (Client, error) {
 				if apiKey != "custom-secret" || baseURL != "https://custom.example/v1" || maxAttempts != 2 {
 					return nil, errors.New("unexpected OpenRouter configuration")
 				}
@@ -362,6 +411,9 @@ func (client *fakeClient) Close() error {
 }
 
 		Name: "openai", BaseURL: "https://example.com",
+		DefaultModel:      "gpt-default",
+		APIKeyEnvironment: "OPENAI_API_KEY",
+		NewClient: func(apiKey, baseURL string, maxAttempts int, _ func(string) string) (Client, error) {
 			if apiKey != "secret" || baseURL != "https://example.com" || maxAttempts != 5 {
 				return nil, errors.New("unexpected provider configuration")
 			}

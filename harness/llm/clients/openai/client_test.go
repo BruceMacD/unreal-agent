@@ -33,6 +33,7 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 		if authorization := request.Header.Get("Authorization"); authorization != "Bearer test-key" {
 			t.Errorf("authorization = %q", authorization)
 		}
+		if accept := request.Header.Get("Accept"); accept != "text/event-stream" {
 			t.Errorf("accept = %q", accept)
 		}
 		var body struct {
@@ -43,12 +44,15 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
+		if body.Model != "gpt-test" || (body.Stream == nil || !*body.Stream) {
 			t.Errorf("body = %#v", body)
 		}
 		if body.PromptCacheKey == nil || *body.PromptCacheKey != cacheKey {
 			t.Errorf("prompt_cache_key = %v, want %q", body.PromptCacheKey, cacheKey)
 		}
 		requestSeen <- struct{}{}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":" + `{"id":"resp-1","status":"completed","output":[],"usage":{}}` + "}\n\n"))
 	}))
 	defer server.Close()
 

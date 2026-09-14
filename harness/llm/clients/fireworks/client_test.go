@@ -33,6 +33,7 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 		if authorization := request.Header.Get("Authorization"); authorization != "Bearer test-key" {
 			t.Errorf("authorization = %q", authorization)
 		}
+		if accept := request.Header.Get("Accept"); accept != "text/event-stream" {
 			t.Errorf("accept = %q", accept)
 		}
 		var body struct {
@@ -44,12 +45,15 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
+		if body.Model != "accounts/fireworks/models/glm-5p3-flash" || body.Store == nil || *body.Store || (body.Stream == nil || !*body.Stream) {
 			t.Errorf("body = %#v", body)
 		}
 		if got := request.Header.Get("x-session-affinity"); got != cacheKey || body.PromptCacheKey != nil {
 			t.Errorf("cache placement: header = %q, body = %v", got, body.PromptCacheKey)
 		}
 		requestSeen <- struct{}{}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":" + `{"id":"resp-1","status":"completed","output":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":5}}}` + "}\n\n"))
 	}))
 	defer server.Close()
 

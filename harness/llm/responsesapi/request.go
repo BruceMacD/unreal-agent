@@ -27,6 +27,7 @@ import (
 	params := openaiapi.CreateResponse{
 		Model:   &model,
 		Store:   &store,
+		Stream:  new(true),
 		Include: &include,
 		Input:   &input,
 	}
