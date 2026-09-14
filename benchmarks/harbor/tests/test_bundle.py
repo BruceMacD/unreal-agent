@@ -51,6 +51,26 @@ class BundleTests(unittest.TestCase):
                 agent.populate_context_post_run(AgentContext())
             self.assertFalse((path / "trajectory.json").exists())
 
+    def test_missing_runner_log_is_recorded_not_raised(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "revision": "a" * 40,
+                        "sha256": hashlib.sha256(b"runner").hexdigest(),
+                        "goos": "linux",
+                        "goarch": "amd64",
+                    }
+                )
+            )
+            context = AgentContext()
+            agent.populate_context_post_run(context)
+            self.assertTrue(context.metadata["agent_logs_missing"])
+            self.assertEqual(context.metadata["revision"], "a" * 40)
+            self.assertIsNone(context.n_input_tokens)
+            self.assertFalse((path / "trajectory.json").exists())
+
     def test_provider_keys_and_nested_model_paths(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary)

@@ -149,6 +149,17 @@ from harness_harbor.trajectory import convert
                 "thinking_level": self._thinking_level,
             },
         )
+        records_path = self.logs_dir / "runner.jsonl"
+        if not records_path.exists():
+            # The log is missing when the sandbox connection was lost before the logs
+            # were downloaded. Record it rather than raise, which aborts the whole job.
+            context.metadata = {
+                **(context.metadata or {}),
+                "agent_logs_missing": True,
+                "revision": self.version(),
+            }
+            return
+        with records_path.open() as records:
         (self.logs_dir / "trajectory.json").write_text(
             json.dumps(trajectory.to_json_dict(), ensure_ascii=False, indent=2) + "\n"
         )
