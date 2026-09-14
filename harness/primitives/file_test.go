@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestReadFileStreamsRangeAndCompletesWithFullSize(t *testing.T) {
 	contents := make([]byte, primitives.IOReadChunkSize*3+17)
 	for index := range contents {
 		contents[index] = byte(index % 251)
@@ -103,6 +104,8 @@ func TestReadFileWithZeroCountEmitsOnlyCompletion(t *testing.T) {
 		t.Fatalf("event type = %q, want %q", events[0].Type, primitives.PrimitiveEventIOReadCompleted)
 	}
 	completed := eventResult[primitives.IOReadCompletedResult](t, events[0])
+	if completed.Size != int64(len(contents)) {
+		t.Fatalf("completed size = %d, want %d", completed.Size, len(contents))
 	}
 }
 

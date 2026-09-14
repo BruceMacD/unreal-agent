@@ -39,6 +39,7 @@ type IOReadOutputResult struct {
 }
 
 type IOReadCompletedResult struct {
+	Size int64
 }
 
 func ReadFile(ctx context.Context, request IOReadRequest, events chan<- PrimitiveEvent) {

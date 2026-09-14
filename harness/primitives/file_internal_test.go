@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -187,4 +188,28 @@ func singleInternalEvent(
 		t.Fatalf("event type = %q, want %q", events[0].Type, eventType)
 	}
 	return events[0]
+}
+
+func TestIsOnlyContextCancellation(t *testing.T) {
+	otherErr := errors.New("cleanup failed")
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "canceled", err: context.Canceled, want: true},
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "wrapped", err: fmt.Errorf("read: %w", context.Canceled), want: true},
+		{name: "joined cancellations", err: errors.Join(context.Canceled, context.DeadlineExceeded), want: true},
+		{name: "mixed join", err: errors.Join(context.Canceled, otherErr), want: false},
+		{name: "other", err: otherErr, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isOnlyContextCancellation(test.err); got != test.want {
+				t.Fatalf("isOnlyContextCancellation() = %t, want %t", got, test.want)
+			}
+		})
+	}
 }
