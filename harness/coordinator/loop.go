@@ -37,6 +37,7 @@ type stopState struct {
 
 type loopState struct {
 	currentTurnID     session.TurnID
+	currentTurnType   session.TurnType
 	toolCalls         map[toolCallKey]toolCallState
 	operations        map[operation.ID]operation.Operation
 	availableInputs   int
@@ -305,6 +306,7 @@ func (current *coordinator) requestModelResponse(
 	turn := session.Turn{
 		ID:             session.TurnID(uuid.New().String()),
 		PreviousTurnID: current.state.currentTurnID,
+		Type:           session.TurnRegular,
 	}
 	item, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemTurn,
@@ -407,6 +409,9 @@ func (current *coordinator) handleModelResponse(
 	}
 	if err := current.storeItemInSessionStore(ctx, item); err != nil {
 		return nil, err
+	}
+	if current.state.currentTurnType == session.TurnCompaction && response.TurnID == current.state.currentTurnID {
+		return nil, nil
 	}
 	statuses, err := current.scheduleToolCalls(ctx)
 	if err != nil {
@@ -535,6 +540,7 @@ func (current *coordinator) addItemToLocalState(
 			)
 		}
 		current.state.currentTurnID = turn.ID
+		current.state.currentTurnType = turn.Type
 		current.state.currentTurnInputs = current.state.availableInputs
 		current.dependencies.ContextBuilder.Commit()
 
@@ -545,6 +551,9 @@ func (current *coordinator) addItemToLocalState(
 				"model response data is %T, want sessionstore.ModelResponse",
 				item.Data,
 			)
+		}
+		if current.state.currentTurnType == session.TurnCompaction && response.TurnID == current.state.currentTurnID {
+			return item, nil
 		}
 		// The complete output includes messages, reasoning, and tool calls.
 		current.dependencies.ContextBuilder.AddModelResponse(response.Response)

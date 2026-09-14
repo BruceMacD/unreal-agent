@@ -290,6 +290,7 @@ func TestCoordinatorReplaysHeartbeat(t *testing.T) {
 				run.store.items = append(run.store.items, storedItem(4, sessionstore.ItemInput, heartbeatInput(t, "heartbeat-1")))
 				if stage != "input" {
 					run.store.items = append(run.store.items,
+						storedItem(5, sessionstore.ItemTurn, session.Turn{ID: "heartbeat-turn", Type: session.TurnRegular}),
 					)
 				}
 				if stage == "response" {

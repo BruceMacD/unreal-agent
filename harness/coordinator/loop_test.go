@@ -25,6 +25,7 @@ import (
 
 func TestCoordinatorRestoresSession(t *testing.T) {
 	input := externalEvent(t, 1, "input-1", "hello")
+	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
 	response := llm.Response{
 		ID: "response-1",
 		Output: []llm.Item{
@@ -65,6 +66,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 	}
 
 	if current.state.currentTurnID != turn.ID ||
+		current.state.currentTurnType != session.TurnRegular ||
 		!reflect.DeepEqual(current.state.operations[resumedOperation.ID], resumedOperation) {
 		t.Fatalf("restored state = %#v", current.state)
 	}
@@ -88,6 +90,43 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAppliesTurnTypes(t *testing.T) {
+	current := newStopTestRun(t, 0).current
+	for _, turnType := range []session.TurnType{session.TurnRegular, session.TurnCompaction, session.TurnRegular, session.TurnCompaction} {
+		turn := session.Turn{ID: "turn", Type: turnType}
+		if _, err := current.addItemToLocalState(sessionstore.Item{Kind: sessionstore.ItemTurn, Data: turn}); err != nil {
+			t.Fatal(err)
+		}
+		if current.state.currentTurnType != turnType {
+			t.Fatalf("current turn type = %q, want %q", current.state.currentTurnType, turnType)
+		}
+	}
+}
+
+func TestCoordinatorRestoresOrdinaryResponseDuringCompaction(t *testing.T) {
+	run := newStopTestRun(t, 0)
+	response := textResponse("Ordinary response")
+	response.Output = append(response.Output, llm.Item{Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "old-call", Name: "unknown"}})
+	run.store.items = []sessionstore.Item{
+		storedItem(1, sessionstore.ItemInput, externalEvent(t, 0, "input", "hello")),
+		storedItem(2, sessionstore.ItemTurn, session.Turn{ID: "ordinary", Type: session.TurnRegular}),
+		storedItem(3, sessionstore.ItemTurn, session.Turn{ID: "compact", PreviousTurnID: "ordinary", Type: session.TurnCompaction}),
+		storedItem(4, sessionstore.ItemModelResponse, sessionstore.ModelResponse{TurnID: "ordinary", Response: response}),
+	}
+	if err := run.current.loadHistory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	built, err := run.current.dependencies.ContextBuilder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := withPreamble(t, llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "hello"}})
+	want = append(want, response.Output...)
+	if !reflect.DeepEqual(built.Request.Input, want) || run.current.state.currentTurnType != session.TurnCompaction || run.current.pendingInputs() != 1 || len(run.current.state.toolCalls) != 1 {
+		t.Fatal("earlier ordinary response was lost or treated as a compaction response")
+	}
+}
+
 func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 	parentInput := externalEvent(t, 1, "parent-input", "parent")
 	items := []sessionstore.Item{storedItem(1, sessionstore.ItemInput, parentInput)}
@@ -95,6 +134,7 @@ func TestCoordinatorRestoresPaginatedForkHistory(t *testing.T) {
 		items = append(items, storedItem(
 			sequence,
 			sessionstore.ItemTurn,
+			session.Turn{ID: session.TurnID(fmt.Sprintf("turn-%d", sequence)), Type: session.TurnRegular},
 		))
 	}
 	items = append(items,
@@ -182,6 +222,7 @@ func TestCoordinatorRejectsSessionHistoryWithoutProgress(t *testing.T) {
 }
 
 func TestCoordinatorKeepsUnreplayableToolStatusInLocalState(t *testing.T) {
+	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
 	status := sessionstore.ToolCallStatus{
 		TurnID: turn.ID,
 		CallID: call.CallID,
@@ -248,6 +289,7 @@ func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
 			Session: session.Session{ID: "session-1"},
 		}},
 		items: []sessionstore.Item{
+			storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 				TurnID:   "turn-1",
 				Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},
@@ -307,6 +349,7 @@ func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T)
 			Operations: []operation.Operation{resumedSecond},
 		},
 		items: []sessionstore.Item{
+			storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 				TurnID:   "turn-1",
 				Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},
@@ -698,6 +741,7 @@ func TestCoordinatorRunCallsModelAfterPersistedExternalInput(t *testing.T) {
 	store.items = []sessionstore.Item{storedItem(
 		1,
 		sessionstore.ItemTurn,
+		session.Turn{ID: "previous-turn", Type: session.TurnRegular},
 	)}
 	inputs := newTestInbox(t)
 	operations := newFakeOperationManager()
@@ -1152,6 +1196,7 @@ func TestCoordinatorRunBatchesCompletedToolCallsIntoOneTurn(t *testing.T) {
 	store := emptyFakeStore()
 	store.resume.Operations = []operation.Operation{operationValue}
 	store.items = []sessionstore.Item{
+		storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 		storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 			TurnID: "turn-1",
 			Response: llm.Response{Output: []llm.Item{
@@ -1570,6 +1615,7 @@ func TestCoordinatorRunSchedulesToolCallsWithoutStatusBeforeDispatch(t *testing.
 			Session: session.Session{ID: "session-1"},
 		}},
 		items: []sessionstore.Item{
+			storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 			storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 				TurnID: "turn-1",
 				Response: llm.Response{Output: []llm.Item{
@@ -1658,6 +1704,7 @@ func TestCoordinatorRunStartsCorrectiveTurnForRecoveredValidationError(t *testin
 	call := llm.ToolCall{CallID: "call-1", Name: tool.BashName, Arguments: `{}`}
 	store := emptyFakeStore()
 	store.items = []sessionstore.Item{
+		storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 		storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 			TurnID:   "turn-1",
 			Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},
@@ -1879,6 +1926,7 @@ func TestCoordinatorRunReturnsReconciliationError(t *testing.T) {
 			TurnID: "another-turn",
 			CallID: "another-call",
 		}),
+		storedItem(4, sessionstore.ItemTurn, session.Turn{ID: "turn-2", Type: session.TurnRegular}),
 	}
 	completed := value
 	completed.Status = operation.StatusCompleted
@@ -2164,6 +2212,7 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 		tool.NewRegistry(tool.StaticTranslators{}),
 	)
 	event := externalEvent(t, 1, "input-1", "hello")
+	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
 	response := sessionstore.ModelResponse{
 		TurnID:   turn.ID,
 		Response: llm.Response{ID: "response-1"},
@@ -2204,6 +2253,7 @@ func TestCoordinatorStoresEverySessionItemKind(t *testing.T) {
 }
 
 func TestCoordinatorReturnsSessionItemStoreErrors(t *testing.T) {
+	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
 	response := sessionstore.ModelResponse{TurnID: turn.ID}
 	status := sessionstore.ToolCallStatus{
 		TurnID: turn.ID,

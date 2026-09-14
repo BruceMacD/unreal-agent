@@ -25,6 +25,8 @@ func TestItemJSONRoundTrip(t *testing.T) {
 			ID: "input-1", Kind: inbox.InputExternal,
 			Payload: jsontext.Value(`{"message":"hello"}`),
 		}},
+		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular}},
+		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnCompaction}},
 		{Sequence: 1, RecordedAt: recordedAt, Kind: ItemModelResponse, Data: ModelResponse{
 			TurnID: "turn-1",
 			Response: llm.Response{Output: []llm.Item{{

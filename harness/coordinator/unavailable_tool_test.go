@@ -33,6 +33,7 @@ func TestCoordinatorRejectsRestoreWhenRecordedCallRequiresUnavailableTool(t *tes
 		t.Run(test.name, func(t *testing.T) {
 			store := emptyFakeStore()
 			store.items = []sessionstore.Item{
+				storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 				storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 					TurnID: "turn-1",
 					Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: llm.ToolCall{
@@ -98,6 +99,7 @@ func TestCoordinatorRestoresUnavailableToolCall(t *testing.T) {
 			wantError := `tool "unknown-tool" is not available`
 			store := emptyFakeStore()
 			store.items = []sessionstore.Item{
+				storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 				storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{
 					TurnID:   "turn-1",
 					Response: llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: call}}},

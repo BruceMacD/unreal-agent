@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
+	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
@@ -80,6 +81,7 @@ func TestCoordinatorResumesUnavailableTool(t *testing.T) {
 }
 
 func TestCoordinatorResumesUnansweredInput(t *testing.T) {
+	for _, stage := range []string{"input", "turn", "response", "compaction", "compaction response"} {
 		t.Run(stage, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 0)
@@ -87,7 +89,13 @@ func TestCoordinatorResumesUnansweredInput(t *testing.T) {
 					storedItem(1, sessionstore.ItemInput, externalEvent(t, 0, "user", "hello")),
 				}
 				if stage != "input" {
+					turn := session.Turn{ID: "first", Type: session.TurnRegular}
+					if stage == "compaction" || stage == "compaction response" {
+						turn.Type = session.TurnCompaction
+					}
+					run.store.items = append(run.store.items, storedItem(2, sessionstore.ItemTurn, turn))
 				}
+				if stage == "response" || stage == "compaction response" {
 					run.store.items = append(run.store.items, storedItem(3, sessionstore.ItemModelResponse,
 						sessionstore.ModelResponse{TurnID: "first", Response: textResponse("Hello.")}))
 				}
@@ -101,7 +109,17 @@ func TestCoordinatorResumesUnansweredInput(t *testing.T) {
 					if len(run.calls) != 1 {
 						t.Fatalf("requests = %d, want resumed input delivery", len(run.calls))
 					}
+					if run.current.state.currentTurnType != session.TurnRegular || run.current.state.currentTurnID == "first" || run.current.pendingInputs() != 1 {
+						t.Fatal("resume did not start ordinary delivery of pending input")
+					}
+					want := withPreamble(t, llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "hello"}})
+					if !reflect.DeepEqual(run.calls[0].request.Input, want) {
+						t.Fatal("resume changed pending input context")
+					}
 					run.respond(t, 0, textResponse("Hello."))
+				}
+				if run.current.pendingInputs() != 0 {
+					t.Fatal("ordinary response did not deliver pending input")
 				}
 				run.assertStopped(t)
 			})

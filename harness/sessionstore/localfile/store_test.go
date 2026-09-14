@@ -51,6 +51,7 @@ func TestStorePersistsTypedHistoryAndPagination(t *testing.T) {
 	if err := store.AppendInput(t.Context(), snapshot.Session.ID, input); err != nil {
 		t.Fatalf("append input: %v", err)
 	}
+	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
 	if err := store.AppendTurn(t.Context(), snapshot.Session.ID, turn); err != nil {
 		t.Fatalf("append turn: %v", err)
 	}
@@ -190,6 +191,7 @@ func TestStoreNotifiesObserversSynchronouslyAfterItemPersistence(t *testing.T) {
 
 	firstID := store.AddObserver(observe("first"))
 	secondID := store.AddObserver(observe("second"))
+	if err := store.AppendTurn(t.Context(), "session-1", session.Turn{ID: "turn-1", Type: session.TurnRegular}); err != nil {
 		t.Fatal(err)
 	}
 	store.RemoveObserver(firstID)
@@ -260,6 +262,7 @@ func TestStoreDoesNotNotifyObserverWhenItemPersistenceFails(t *testing.T) {
 		observed++
 	})
 
+	if err := store.AppendTurn(t.Context(), "missing", session.Turn{ID: "turn-1", Type: session.TurnRegular}); err == nil {
 		t.Fatal("append to missing session succeeded")
 	}
 	if observed != 0 {
@@ -508,6 +511,7 @@ func TestKnownSessionAppendDoesNotReadLog(t *testing.T) {
 		t.Skip("platform permits reading a write-only file")
 	}
 
+	if err := store.AppendTurn(t.Context(), "session-1", session.Turn{ID: "turn-1", Type: session.TurnRegular}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
@@ -696,6 +700,7 @@ func TestFailedReplacementEvictsCachedWriteState(t *testing.T) {
 	if _, err := newStore(t, directory).Create(t.Context(), "session-1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.AppendTurn(t.Context(), "session-1", session.Turn{ID: "fresh-turn", Type: session.TurnRegular}); err != nil {
 		t.Fatalf("append after failed replacement used stale write state: %v", err)
 	}
 }
@@ -1136,6 +1141,7 @@ func TestMissingSessionsFailEveryReadModifyWriteMethod(t *testing.T) {
 		{
 			name: "append turn",
 			call: func() error {
+				return store.AppendTurn(t.Context(), "missing", session.Turn{ID: "turn-1", Type: session.TurnRegular})
 			},
 		},
 		{
@@ -1200,6 +1206,7 @@ func TestRejectedPublicTransitionsDoNotChangePersistedState(t *testing.T) {
 			call: func(store *localfile.Store) error {
 				return store.AppendTurn(t.Context(), "session-1", session.Turn{
 					ID: "turn-2", PreviousTurnID: "wrong",
+					Type: session.TurnRegular,
 				})
 			},
 		},
@@ -1310,6 +1317,7 @@ func TestStoreRejectsInvalidSessionIDsAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := sessionFileContents(t, directory)
+	if err := store.AppendTurn(ctx, "cached-session", session.Turn{ID: "turn-1", Type: session.TurnRegular}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cached mutation error = %v, want context.Canceled", err)
 	}
 	after := sessionFileContents(t, directory)
@@ -1534,6 +1542,7 @@ func createTurn(
 	t.Helper()
 	if err := store.AppendTurn(t.Context(), sessionID, session.Turn{
 		ID: turnID, PreviousTurnID: previousTurnID,
+		Type: session.TurnRegular,
 	}); err != nil {
 		t.Fatalf("append turn: %v", err)
 	}

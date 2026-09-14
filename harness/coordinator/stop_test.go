@@ -76,6 +76,47 @@ func TestCoordinatorWhenIdleDeliversPendingResults(t *testing.T) {
 func TestCoordinatorStopsAfterCancellationIsRecorded(t *testing.T) {
 }
 
+func TestCoordinatorCancelsCompactionWithoutRecordingAResponse(t *testing.T) {
+		t.Run(string(mode), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				run := newStopTestRun(t, 0)
+				// Return a successful result even after cancellation.
+				run.current.dependencies.LLM = &fakeAdapter{respond: func(ctx context.Context, request llm.Request) (llm.Response, error) {
+					call := stopTestCall{ctx: ctx, request: request, response: make(chan llm.Response)}
+					run.calls = append(run.calls, call)
+					return <-call.response, nil
+				}}
+				run.start(t)
+				run.input(t, externalEvent(t, 0, "first", "hello"))
+				run.current.state.currentTurnType = session.TurnCompaction
+				if mode == "steer" {
+					run.input(t, externalEvent(t, 0, "second", "change course"))
+				} else {
+					run.input(t, stopInput(t, "stop", mode))
+				}
+				wantType := session.TurnRegular
+				if mode == inbox.StopHard {
+					wantType = session.TurnCompaction
+				}
+				if run.calls[0].ctx.Err() == nil || run.current.state.currentTurnType != wantType {
+					t.Fatal("cancellation did not preserve the recorded turn kind until the next turn")
+				}
+				run.respond(t, 0, textResponse("Late summary"))
+				if len(run.store.appendedResponses) != 0 || run.current.state.deliveredInputs != 0 {
+					t.Fatal("canceled compaction recorded a response or delivered input")
+				}
+				if mode != inbox.StopHard {
+					if len(run.calls) != 2 || run.current.cancelModel == nil {
+						t.Fatal("late response affected the replacement request")
+					}
+					run.respond(t, 1, textResponse("Done"))
+				}
+				run.assertStopped(t)
+			})
+		})
+	}
+}
+
 	synctest.Test(t, func(t *testing.T) {
 		run.start(t)
 		}
@@ -253,6 +294,7 @@ func TestCoordinatorWhenIdleDeliversRestoredResults(t *testing.T) {
 				run.current.dependencies.Restored = run.store.resume
 				if stage != "completed" {
 					run.store.items = append(run.store.items,
+						storedItem(4, sessionstore.ItemTurn, session.Turn{ID: "delivered", PreviousTurnID: "turn-1", Type: session.TurnRegular}),
 					)
 				}
 				if stage == "response-recorded" {

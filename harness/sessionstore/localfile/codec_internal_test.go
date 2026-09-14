@@ -3,6 +3,9 @@ package localfile
 import (
 	"bytes"
 	"encoding/json/jsontext"
+	"errors"
+	"io/fs"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -56,12 +59,14 @@ func TestEncodeInitialLogRejectsInvalidItems(t *testing.T) {
 			name: "non-contiguous sequence",
 			item: sessionstore.Item{
 				Sequence: 2, RecordedAt: stateUpdatedAt,
+				Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 			},
 			want: "non-contiguous sequence",
 		},
 		{
 			name: "zero recorded time",
 			item: sessionstore.Item{
+				Sequence: 1, Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 			},
 			want: "recorded time is zero",
 		},
@@ -107,6 +112,7 @@ func TestEncodeInitialLogEmbedsJSONValues(t *testing.T) {
 	}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
+	if err := state.appendTurn(session.Turn{ID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.appendModelResponse(sessionstore.ModelResponse{
@@ -150,6 +156,7 @@ func TestDecodeLogFoldsOperationUpdates(t *testing.T) {
 	encoded := emptyLog(t)
 	turn := sessionstore.Item{
 		Sequence: 1, RecordedAt: stateUpdatedAt,
+		Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 	}
 	encoded = append(encoded, mustRecord(t, recordItem, itemRecord{Item: turn})...)
 	initial := validOperation("operation-1", operation.StatusReady)
@@ -203,6 +210,7 @@ func TestDecodeLogPreservesInheritedInput(t *testing.T) {
 	encoded := emptyLog(t)
 	encoded = append(encoded, mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
 		Sequence: 1, RecordedAt: stateUpdatedAt,
+		Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "parent-turn", Type: session.TurnRegular},
 	}})...)
 	encoded = append(encoded, mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
 		Sequence: 2, RecordedAt: stateUpdatedAt,
@@ -230,6 +238,7 @@ func TestDecodeLogRejectsInvalidRecords(t *testing.T) {
 	header := emptyLog(t)
 	turn := sessionstore.Item{
 		Sequence: 1, RecordedAt: stateUpdatedAt,
+		Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 	}
 	status := sessionstore.Item{
 		Sequence: 2, RecordedAt: stateUpdatedAt,
@@ -318,12 +327,14 @@ func TestDecodeLogRejectsInvalidRecords(t *testing.T) {
 			name: "non-contiguous item",
 			encoded: append(append([]byte(nil), header...), mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
 				Sequence: 2, RecordedAt: stateUpdatedAt,
+				Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 			}})...),
 			want: "has sequence 2, want 1",
 		},
 		{
 			name: "zero item time",
 			encoded: append(append([]byte(nil), header...), mustRecord(t, recordItem, itemRecord{Item: sessionstore.Item{
+				Sequence: 1, Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 			}})...),
 			want: "recorded time is zero",
 		},
@@ -343,6 +354,7 @@ func TestDecodeLogRejectsInvalidRecords(t *testing.T) {
 				Item: sessionstore.Item{
 					Sequence: 2, RecordedAt: stateUpdatedAt,
 					Kind: sessionstore.ItemTurn,
+					Data: session.Turn{ID: "turn-2", PreviousTurnID: "other", Type: session.TurnRegular},
 				},
 			})...),
 			want: `previous turn is "other", want "turn-1"`,
@@ -353,6 +365,7 @@ func TestDecodeLogRejectsInvalidRecords(t *testing.T) {
 				Item: sessionstore.Item{
 					Sequence: 2, RecordedAt: stateUpdatedAt,
 					Kind: sessionstore.ItemTurn,
+					Data: session.Turn{ID: "turn-1", PreviousTurnID: "turn-1", Type: session.TurnRegular},
 				},
 			})...),
 			want: `append turn "turn-1": file already exists`,
@@ -481,6 +494,44 @@ func TestDecodeLogRejectsInvalidRecords(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestTurnTypesSurviveReopen(t *testing.T) {
+	for _, turnType := range []session.TurnType{session.TurnRegular, session.TurnCompaction} {
+		for _, outcome := range []string{"incomplete", "response"} {
+			t.Run(string(turnType)+"/"+outcome, func(t *testing.T) {
+				state := newStoredState("session-1", stateCreatedAt)
+				if err := state.appendTurn(session.Turn{ID: "turn-1", Type: turnType}, stateUpdatedAt); err != nil {
+					t.Fatal(err)
+				}
+				response := validResponse("turn-1")
+				if outcome == "response" {
+					if err := state.appendModelResponse(response, stateUpdatedAt); err != nil {
+						t.Fatal(err)
+					}
+				}
+				encoded, err := encodeInitialLog(state.Snapshot.Session, state.Items)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reopened, _, err := decodeLog(encoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(state, reopened) {
+					t.Fatal("reopen changed state")
+				}
+				err = reopened.appendModelResponse(response, stateUpdatedAt)
+				if outcome == "response" {
+					if !errors.Is(err, fs.ErrExist) {
+						t.Fatalf("duplicate response accepted: %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

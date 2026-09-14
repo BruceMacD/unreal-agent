@@ -3,6 +3,7 @@ package localfile
 import (
 	"encoding/json/jsontext"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,6 +52,7 @@ func TestStoreLoadsGoldenLog(t *testing.T) {
 		},
 		{
 			Sequence: 2, RecordedAt: recordedAt, Kind: sessionstore.ItemTurn,
+			Data: session.Turn{ID: "turn-1", Type: session.TurnRegular},
 		},
 		{
 			Sequence: 3, RecordedAt: recordedAt, Kind: sessionstore.ItemModelResponse,
@@ -132,6 +134,7 @@ func TestStoreLoadsGoldenForkLog(t *testing.T) {
 	want.Items = []sessionstore.Item{
 		{
 			Sequence: 1, RecordedAt: recordedAt, Kind: sessionstore.ItemTurn,
+			Data: session.Turn{ID: "parent-turn", Type: session.TurnRegular},
 		},
 		{
 			Sequence: 2, RecordedAt: recordedAt, Kind: sessionstore.ItemFork,
@@ -148,6 +151,7 @@ func TestStoreLoadsGoldenForkLog(t *testing.T) {
 		},
 		{
 			Sequence: 4, RecordedAt: recordedAt, Kind: sessionstore.ItemTurn,
+			Data: session.Turn{ID: "child-turn-1", PreviousTurnID: "parent-turn", Type: session.TurnRegular},
 		},
 		{
 			Sequence: 5, RecordedAt: recordedAt, Kind: sessionstore.ItemModelResponse,
@@ -184,6 +188,7 @@ func TestStoreLoadsGoldenForkLog(t *testing.T) {
 		},
 		{
 			Sequence: 6, RecordedAt: recordedAt, Kind: sessionstore.ItemTurn,
+			Data: session.Turn{ID: "child-turn-2", PreviousTurnID: "child-turn-1", Type: session.TurnRegular},
 		},
 		{
 			Sequence: 7, RecordedAt: recordedAt, Kind: sessionstore.ItemModelResponse,
@@ -244,6 +249,7 @@ func TestStoreCachesWriteStateForCreatedAndLoadedSessions(t *testing.T) {
 	if _, _, ok := reopened.getCachedWriteState("session-1"); ok {
 		t.Fatal("read cached the session write state")
 	}
+	if err := reopened.AppendTurn(t.Context(), "session-1", session.Turn{ID: "turn-1", Type: session.TurnRegular}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, ok := reopened.getCachedWriteState("session-1"); !ok {
@@ -402,6 +408,75 @@ func TestNewRejectsInvalidDirectories(t *testing.T) {
 	}
 	if _, err := New(path); err == nil || !strings.Contains(err.Error(), "create session store directory") {
 		t.Fatalf("error = %v, want directory-creation failure", err)
+	}
+}
+
+func TestCompactionHistoryReopensAndForks(t *testing.T) {
+	for _, outcome := range []string{"incomplete", "response"} {
+		t.Run(outcome, func(t *testing.T) {
+			directory := t.TempDir()
+			store, err := New(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Create(t.Context(), "parent"); err != nil {
+				t.Fatal(err)
+			}
+			var observed []sessionstore.Item
+			store.AddObserver(func(_ session.ID, item sessionstore.Item) { observed = append(observed, item) })
+			if err := store.AppendTurn(t.Context(), "parent", session.Turn{ID: "compact", Type: session.TurnCompaction}); err != nil {
+				t.Fatal(err)
+			}
+			if outcome != "incomplete" {
+				if err := store.AppendInput(t.Context(), "parent", inbox.Input{ID: "late", Kind: inbox.InputExternal, Payload: []byte(`"hello"`)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.AppendModelResponse(t.Context(), "parent", validResponse("compact")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store, err = New(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := store.Items(t.Context(), "parent", 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(page.Items, observed) {
+				t.Fatalf("replayed = %#v, observed = %#v", page.Items, observed)
+			}
+			// A later turn must not extend the selected fork boundary.
+			if err := store.AppendTurn(t.Context(), "parent", session.Turn{ID: "next", PreviousTurnID: "compact", Type: session.TurnRegular}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Fork(t.Context(), "child", "parent", "compact"); err != nil {
+				t.Fatal(err)
+			}
+			store, err = New(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := store.Items(t.Context(), "child", 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(child.Items) != len(observed)+1 || !reflect.DeepEqual(child.Items[:len(observed)], observed) || child.Items[len(observed)].Kind != sessionstore.ItemFork {
+				t.Fatalf("fork lost compaction history: %#v", child.Items)
+			}
+			if err := store.AppendModelResponse(t.Context(), "child", validResponse("compact")); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("inherited response error = %v", err)
+			}
+			if err := store.AppendTurn(t.Context(), "child", session.Turn{ID: "child-turn", PreviousTurnID: "compact", Type: session.TurnCompaction}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AppendModelResponse(t.Context(), "child", validResponse("child-turn")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Resume(t.Context(), "child"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

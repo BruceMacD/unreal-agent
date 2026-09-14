@@ -34,6 +34,7 @@ func TestStoredStateLifecycle(t *testing.T) {
 	if err := state.appendInput(input, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
+	if err := state.appendTurn(session.Turn{ID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	response := sessionstore.ModelResponse{
@@ -258,12 +259,14 @@ func TestRejectedStateTransitionsDoNotMutateState(t *testing.T) {
 			name:  "wrong previous turn",
 			state: stateWithTurn,
 			apply: func(state *storedState) error {
+				return state.appendTurn(session.Turn{ID: "turn-2", PreviousTurnID: "other", Type: session.TurnRegular}, stateUpdatedAt)
 			},
 		},
 		{
 			name:  "duplicate turn",
 			state: stateWithTurn,
 			apply: func(state *storedState) error {
+				return state.appendTurn(session.Turn{ID: "turn-1", PreviousTurnID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt)
 			},
 			is: fs.ErrExist,
 		},
@@ -461,6 +464,7 @@ func TestForkStoredStateUsesLastRecordForTurn(t *testing.T) {
 	}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
+	if err := parent.appendTurn(session.Turn{ID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := parent.appendModelResponse(validResponse("turn-1", "call-1"), stateUpdatedAt); err != nil {
@@ -479,6 +483,7 @@ func TestForkStoredStateUsesLastRecordForTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := parent.appendTurn(
+		session.Turn{ID: "turn-2", PreviousTurnID: "turn-1", Type: session.TurnRegular},
 		stateUpdatedAt,
 	); err != nil {
 		t.Fatal(err)
@@ -509,12 +514,14 @@ func TestForkStoredStateUsesLastRecordForTurn(t *testing.T) {
 
 func TestForkStoredStateIgnoresDelayedStatusBeyondNewerTurn(t *testing.T) {
 	parent := newStoredState("parent", stateCreatedAt)
+	if err := parent.appendTurn(session.Turn{ID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := parent.appendModelResponse(validResponse("turn-1", "call-1"), stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := parent.appendTurn(
+		session.Turn{ID: "turn-2", PreviousTurnID: "turn-1", Type: session.TurnRegular},
 		stateUpdatedAt,
 	); err != nil {
 		t.Fatal(err)
@@ -554,6 +561,7 @@ func TestForkStoredStateIgnoresDelayedStatusBeyondNewerTurn(t *testing.T) {
 
 func TestForkStoredStatePreservesInterleavedPrefix(t *testing.T) {
 	parent := newStoredState("parent", stateCreatedAt)
+	if err := parent.appendTurn(session.Turn{ID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := parent.appendModelResponse(validResponse("turn-1"), stateUpdatedAt); err != nil {
@@ -572,6 +580,7 @@ func TestForkStoredStatePreservesInterleavedPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := parent.appendTurn(
+		session.Turn{ID: "turn-2", PreviousTurnID: "turn-1", Type: session.TurnRegular},
 		stateUpdatedAt,
 	); err != nil {
 		t.Fatal(err)
@@ -599,6 +608,7 @@ func TestForkStoredStatePreservesInterleavedPrefix(t *testing.T) {
 
 func TestForkStoredStateScopesDelayedStatusesToOwningBranch(t *testing.T) {
 	root := newStoredState("root", stateCreatedAt)
+	if err := root.appendTurn(session.Turn{ID: "root-turn", Type: session.TurnRegular}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := root.appendModelResponse(validResponse("root-turn"), stateUpdatedAt); err != nil {
@@ -622,6 +632,7 @@ func TestForkStoredStateScopesDelayedStatusesToOwningBranch(t *testing.T) {
 	}
 
 	if err := child.appendTurn(
+		session.Turn{ID: "child-turn-1", PreviousTurnID: "root-turn", Type: session.TurnRegular},
 		stateUpdatedAt,
 	); err != nil {
 		t.Fatal(err)
@@ -630,6 +641,7 @@ func TestForkStoredStateScopesDelayedStatusesToOwningBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := child.appendTurn(
+		session.Turn{ID: "child-turn-2", PreviousTurnID: "child-turn-1", Type: session.TurnRegular},
 		stateUpdatedAt,
 	); err != nil {
 		t.Fatal(err)
@@ -685,6 +697,7 @@ func emptyTestState(*testing.T) storedState {
 func stateWithTurn(t *testing.T) storedState {
 	t.Helper()
 	state := emptyTestState(t)
+	if err := state.appendTurn(session.Turn{ID: "turn-1", Type: session.TurnRegular}, stateUpdatedAt); err != nil {
 		t.Fatal(err)
 	}
 	return state

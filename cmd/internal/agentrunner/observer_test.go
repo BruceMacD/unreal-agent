@@ -40,6 +40,7 @@ func TestSessionObserverStopsOnOutputFailure(t *testing.T) {
 	want := errors.New("output unavailable")
 	output := &failingItemWriter{kind: sessionstore.ItemTurn, err: want}
 	observer := &sessionObserver{sessionID: "session", output: output, cancel: cancel}
+	item := sessionstore.Item{Kind: sessionstore.ItemTurn, Data: session.Turn{ID: "turn-1", Type: session.TurnRegular}}
 	observer.Observe("other-session", item)
 	if output.writes != 0 || ctx.Err() != nil {
 		t.Fatal("unrelated session affected the observer")

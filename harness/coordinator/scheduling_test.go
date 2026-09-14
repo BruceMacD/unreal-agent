@@ -258,6 +258,7 @@ func independentToolCalls(t *testing.T, count int) (*fakeStore, tool.Registry) {
 	t.Helper()
 	store := emptyFakeStore()
 	store.items = []sessionstore.Item{
+		storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
 		storedItem(2, sessionstore.ItemModelResponse, sessionstore.ModelResponse{}),
 	}
 	response := sessionstore.ModelResponse{TurnID: "turn-1"}
