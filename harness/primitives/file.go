@@ -42,6 +42,8 @@ type IOReadCompletedResult struct {
 	Size int64
 }
 
+// ReadFile reads a range bounded by the file's initial metadata size.
+// Virtual files whose reported size does not describe their content are unsupported.
 func ReadFile(ctx context.Context, request IOReadRequest, events chan<- PrimitiveEvent) {
 	go streamFile(ctx, request, events)
 }
@@ -65,6 +67,8 @@ func streamFile(ctx context.Context, request IOReadRequest, events chan<- Primit
 }
 
 type inspectedReadFile interface {
+	io.ReaderAt
+	io.Closer
 	Stat() (os.FileInfo, error)
 }
 
@@ -89,22 +93,37 @@ func inspectAndStreamFile(
 		))
 		return
 	}
+	streamOpenFile(ctx, request, file, info.Size(), events)
 }
 
 func streamOpenFile(
 	ctx context.Context,
 	request IOReadRequest,
+	file inspectedReadFile,
+	size int64,
 	events chan<- PrimitiveEvent,
 ) {
+	var remaining int64
+	if request.Offset < size {
+		remaining = min(request.Count, size-request.Offset)
+	}
+	fileOffset := request.Offset
+	for remaining > 0 {
 		if ctx.Err() != nil {
 			finishCanceledRead(events, request, file)
 			return
 		}
+		data := make([]byte, min(remaining, IOReadChunkSize))
+		count, readErr := file.ReadAt(data, fileOffset)
 		if ctx.Err() != nil {
 			finishCanceledRead(events, request, file)
 			return
 		}
+		if errors.Is(readErr, io.EOF) && count == len(data) {
+			readErr = nil
 		}
+		if count != len(data) && (readErr == nil || errors.Is(readErr, io.EOF)) {
+			readErr = io.ErrUnexpectedEOF
 		}
 		if readErr != nil {
 			events <- ioReadFailure(request, errors.Join(
@@ -113,8 +132,44 @@ func streamOpenFile(
 			))
 			return
 		}
+		event := PrimitiveEvent{
+			Type:          PrimitiveEventIOReadOutput,
+			Source:        request.Source,
+			CorrelationID: request.CorrelationID,
+			Result: IOReadOutputResult{
+				Offset: fileOffset,
+				Data:   data,
+			},
+		}
+		select {
+		case events <- event:
+		case <-ctx.Done():
+			finishCanceledRead(events, request, file)
+			return
+		}
+		fileOffset += int64(count)
+		remaining -= int64(count)
 	}
 
+	if ctx.Err() != nil {
+		finishCanceledRead(events, request, file)
+		return
+	}
+	info, err := file.Stat()
+	if err != nil {
+		events <- ioReadFailure(request, errors.Join(
+			fmt.Errorf("inspect %q after reading: %w", request.Path, err),
+			file.Close(),
+		))
+		return
+	}
+	if info.Size() != size {
+		events <- ioReadFailure(request, errors.Join(
+			fmt.Errorf("read %q: file size changed from %d to %d", request.Path, size, info.Size()),
+			file.Close(),
+		))
+		return
+	}
 	if err := file.Close(); err != nil {
 		events <- ioReadFailure(request, fmt.Errorf("close %q: %w", request.Path, err))
 		return
@@ -129,6 +184,7 @@ func streamOpenFile(
 		Source:        request.Source,
 		CorrelationID: request.CorrelationID,
 		Result: IOReadCompletedResult{
+			Size: size,
 		},
 	}
 }

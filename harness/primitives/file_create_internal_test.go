@@ -47,17 +47,27 @@ func TestCreateNewPathUsesRequestedMode(t *testing.T) {
 	}
 }
 
+func TestUseExistingPathRequestsRetryForMissingEntry(t *testing.T) {
 	parentPath := t.TempDir()
 	parent, err := openCreateDirectory(parentPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer parent.Close()
 	request := IOCreateRequest{
 		Kind: IOCreateRegularFile,
+		Path: filepath.Join(parentPath, "missing"),
 		Mode: 0o600,
 	}
+	result, retry, err := useExistingPath(request, "missing", parentPath, parent)
+	if err != nil || !retry || result != (IOCreateResult{}) {
+		t.Fatalf("use missing path = (%#v, %t, %v), want empty result and retry", result, retry, err)
 	}
+	if _, err := parent.Stat(); err != nil {
+		t.Fatalf("parent must remain open for retry: %v", err)
 	}
+	if _, err := os.Stat(request.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retry request created an entry: %v", err)
 	}
 }
 
