@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 )
 
 type remoteJobHandlerUpdate struct {
@@ -16,6 +17,7 @@ type remoteJobHandlers struct {
 	handlers []RemoteJobHandler
 	closed   []bool
 	updates  chan remoteJobHandlerUpdate
+	workers  sync.WaitGroup
 }
 
 func newRemoteJobHandlers(ctx context.Context, handlers []RemoteJobHandler) *remoteJobHandlers {
@@ -26,6 +28,7 @@ func newRemoteJobHandlers(ctx context.Context, handlers []RemoteJobHandler) *rem
 	}
 	for index, handler := range router.handlers {
 		if handler != nil {
+			router.workers.Go(func() { router.forward(ctx, index, handler) })
 		}
 	}
 	return router

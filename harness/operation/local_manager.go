@@ -103,6 +103,7 @@ func (manager *LocalOperationManager) Updates() <-chan Operation {
 
 func (manager *LocalOperationManager) run() {
 	defer close(manager.updates)
+	defer manager.remoteJobs.workers.Wait()
 	operations := make(map[ID]*localRunningOperation)
 	accepted := make(map[ID]struct{})
 	activePrimitives := 0
