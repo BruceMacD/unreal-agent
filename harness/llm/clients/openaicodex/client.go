@@ -56,6 +56,8 @@ func NewClient(config Config) (*Client, error) {
 			"Authorization":      {"Bearer " + credentials.accessToken},
 			"ChatGPT-Account-ID": {credentials.accountID},
 			"Content-Type":       {"application/json"},
+			"originator":         {"unreal-agent"},
+			"User-Agent":         {"unreal-agent"},
 		},
 		CacheKeyPlacement: responsesapi.CacheKeyPlacement{UsePromptCacheKeyField: true, Header: "session-id"},
 		MaxAttempts:       config.MaxAttempts,

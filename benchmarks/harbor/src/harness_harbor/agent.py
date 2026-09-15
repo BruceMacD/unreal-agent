@@ -16,6 +16,7 @@ from harness_harbor.bundle import Bundle
 from harness_harbor.trajectory import convert
 
 
+class UnrealAgent(BaseInstalledAgent):
     SUPPORTS_ATIF = True
     MODEL_CONNECTION = ModelConnectionSpec()
 
@@ -53,10 +54,12 @@ from harness_harbor.trajectory import convert
         self._bundle = Bundle.load(bundle)
         self._thinking_level = thinking_level
         self._runner_session = str(uuid4())
+        self._remote = PurePosixPath("/installed-agent/unreal-agent")
 
     @staticmethod
     @override
     def name() -> str:
+        return "unreal-agent"
 
     @override
     def version(self) -> str:

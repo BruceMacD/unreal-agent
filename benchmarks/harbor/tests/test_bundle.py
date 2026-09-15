@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
 
+from harness_harbor.agent import UnrealAgent
 from harness_harbor.bundle import Bundle
 
 
@@ -27,6 +28,9 @@ class BundleTests(unittest.TestCase):
             )
             bundle = Bundle.load(temporary)
             self.assertEqual(bundle.read_binary(), b"original")
+            agent = UnrealAgent(
+                bundle=temporary, logs_dir=path, model_name="openai/test"
+            )
             self.assertEqual(agent.version(), "a" * 40)
             with self.assertRaisesRegex(ValueError, "checksum"):
                 bundle.read_binary()
@@ -46,6 +50,9 @@ class BundleTests(unittest.TestCase):
                     }
                 )
             )
+            agent = UnrealAgent(
+                bundle=temporary, logs_dir=path, model_name="openai/test"
+            )
             (path / "runner.jsonl").write_text("{")
             with self.assertRaisesRegex(ValueError, "line 1"):
                 agent.populate_context_post_run(AgentContext())
@@ -63,6 +70,9 @@ class BundleTests(unittest.TestCase):
                         "goarch": "amd64",
                     }
                 )
+            )
+            agent = UnrealAgent(
+                bundle=temporary, logs_dir=path, model_name="openai/test"
             )
             context = AgentContext()
             agent.populate_context_post_run(context)
@@ -90,6 +100,7 @@ class BundleTests(unittest.TestCase):
                 ("fireworks_ai", "FIREWORKS_AI_API_KEY"),
             ):
                 with self.subTest(provider=prefix):
+                    agent = UnrealAgent(
                         bundle=temporary,
                         logs_dir=path,
                         model_name=f"{prefix}/organization/model",
@@ -103,7 +114,9 @@ class BundleTests(unittest.TestCase):
             with ExitStack() as stack:
                 stack.enter_context(self.subTest(model=model))
                 stack.enter_context(self.assertRaises(ValueError))
+                UnrealAgent(bundle="missing", logs_dir=Path("."), model_name=model)
         with self.assertRaisesRegex(ValueError, "thinking_level"):
+            UnrealAgent(
                 bundle="missing",
                 logs_dir=Path("."),
                 model_name="openai/test",
@@ -129,6 +142,7 @@ class TaskCapabilityTests(unittest.TestCase):
                     }
                 )
             )
+            agent = UnrealAgent(
                 bundle=temporary,
                 logs_dir=path,
                 model_name="openai/test",

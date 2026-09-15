@@ -24,6 +24,7 @@ func TestClientUsesSubscriptionProtocol(t *testing.T) {
 		if r.URL.Path != "/responses" || r.Method != "POST" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
+		for key, want := range map[string]string{"Authorization": "Bearer access-token", "ChatGPT-Account-ID": "account", "Accept": "text/event-stream", "Content-Type": "application/json", "originator": "unreal-agent"} {
 			if r.Header.Get(key) != want {
 				t.Errorf("incorrect %s header", key)
 			}

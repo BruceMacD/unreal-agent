@@ -19,6 +19,7 @@ def smoke(bundle: Path) -> None:
                 "-p",
                 str(Path(__file__).parent / "task"),
                 "-a",
+                "harness_harbor.agent:UnrealAgent",
                 "-m",
                 "openai/smoke",
                 "--ak",

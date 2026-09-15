@@ -1,6 +1,7 @@
 [project]
 name = "harness-harbor"
 version = "0.1.0"
+description = "Harbor installed-agent integration for Unreal Agent"
 requires-python = ">=3.12"
 dependencies = ["harbor==0.22.0", "certifi"]
 
