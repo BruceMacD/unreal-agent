@@ -64,6 +64,11 @@ type Snapshot struct {
 	Session session.Session
 }
 
+type SessionInfo struct {
+	ID            session.ID
+	LastUpdatedAt time.Time
+}
+
 type Page struct {
 	Items     []Item
 	NextAfter Sequence
@@ -83,6 +88,7 @@ type Store interface {
 	AddObserver(Observer) ObserverID
 	RemoveObserver(ObserverID)
 	Create(context.Context, session.ID) (Snapshot, error)
+	ListSessions(context.Context) ([]SessionInfo, error)
 	Inspect(context.Context, session.ID) (Snapshot, error)
 	Items(context.Context, session.ID, Sequence, int) (Page, error)
 	AppendInput(context.Context, session.ID, inbox.Input) error

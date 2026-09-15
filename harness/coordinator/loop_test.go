@@ -2554,6 +2554,10 @@ func (store *fakeStore) Create(context.Context, session.ID) (sessionstore.Snapsh
 	return sessionstore.Snapshot{}, errors.New("unexpected create")
 }
 
+func (*fakeStore) ListSessions(context.Context) ([]sessionstore.SessionInfo, error) {
+	return nil, errors.New("unexpected list sessions")
+}
+
 func (store *fakeStore) Inspect(context.Context, session.ID) (sessionstore.Snapshot, error) {
 	return store.resume.Snapshot, nil
 }
