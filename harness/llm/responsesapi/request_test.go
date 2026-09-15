@@ -4,10 +4,92 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
+
+func TestRequestInputItemReplaysToolCallArguments(t *testing.T) {
+	tests := []struct {
+		name      string
+		arguments string
+		valid     bool
+	}{
+		{name: "empty object", arguments: `{}`, valid: true},
+		{name: "whitespace and escapes", arguments: " \n{\"command\": \"echo \\u0061\"}\t", valid: true},
+		{name: "schema error", arguments: `{"command":42}`, valid: true},
+		{name: "nested values", arguments: `{"array":[null,true,1e1000],"object":{}}`, valid: true},
+		{name: "truncated string", arguments: `{"command":"apt-get install -y r-base`},
+		{name: "truncated object", arguments: `{"command":"pwd"`},
+		{name: "trailing data", arguments: `{} []`},
+		{name: "duplicate names", arguments: `{"command":"pwd","command":"ls"}`},
+		{name: "null", arguments: `null`},
+		{name: "null with whitespace", arguments: " \nnull\t"},
+		{name: "array", arguments: `[]`},
+		{name: "string", arguments: `"pwd"`},
+		{name: "number", arguments: `42`},
+		{name: "boolean", arguments: `true`},
+		{name: "empty", arguments: ""},
+		{name: "whitespace", arguments: " \n\t"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			call := llm.ToolCall{CallID: "call-1", Name: "Bash", Arguments: test.arguments}
+			source := llm.Item{ProviderID: "function-1", Type: llm.ItemToolCall, Data: call}
+			item, err := requestInputItem(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if wire.Type != "function_call" || wire.ID != source.ProviderID || wire.CallID != call.CallID || wire.Name != call.Name {
+				t.Fatalf("call identity changed: %+v", wire)
+			}
+			var object map[string]jsontext.Value
+			if err := json.Unmarshal([]byte(wire.Arguments), &object); err != nil || object == nil {
+				t.Fatalf("replayed arguments = %q, want a JSON object: %v", wire.Arguments, err)
+			}
+			if test.valid {
+				if wire.Arguments != test.arguments {
+					t.Fatalf("valid arguments changed: %q", wire.Arguments)
+				}
+			} else {
+				var raw string
+				if err := json.Unmarshal(object["invalid_arguments"], &raw); err != nil {
+					t.Fatal(err)
+				}
+				if len(object) != 1 || raw != test.arguments {
+					t.Fatalf("invalid arguments were not preserved: %q", wire.Arguments)
+				}
+			}
+			if source.Data.(llm.ToolCall) != call {
+				t.Fatal("encoding changed the original tool call")
+			}
+		})
+	}
+}
+
+func TestRequestBodyReportsToolArgumentEncodingError(t *testing.T) {
+	_, err := requestBody(llm.Request{Input: []llm.Item{{
+		Type: llm.ItemToolCall,
+		Data: llm.ToolCall{CallID: "call-1", Name: "Bash", Arguments: "\xff"},
+	if err == nil || !strings.Contains(err.Error(), `input item 0: encode tool call "call-1" arguments:`) {
+		t.Fatalf("error = %v, want the argument encoding error with call context", err)
+	}
+}
 
 func TestRequestBodyRejectsInvalidItemPayloads(t *testing.T) {
 	tests := []struct {

@@ -1,6 +1,7 @@
 package responsesapi
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -159,7 +160,12 @@ func requestItem(source llm.Item) (openaiapi.Item, error) {
 		if !ok {
 			return item, fmt.Errorf("tool_call item data must be llm.ToolCall, got %T", source.Data)
 		}
+		arguments, err := requestToolCallArguments(call.Arguments)
+		if err != nil {
+			return item, fmt.Errorf("encode tool call %q arguments: %w", call.CallID, err)
+		}
 		converted := openaiapi.FunctionToolCall{
+			Arguments: arguments,
 			CallId:    call.CallID,
 			Name:      call.Name,
 			Type:      openaiapi.FunctionCall,
@@ -201,6 +207,19 @@ func requestItem(source llm.Item) (openaiapi.Item, error) {
 		return item, fmt.Errorf("unsupported input item type %q", source.Type)
 	}
 	return item, nil
+}
+
+func requestToolCallArguments(arguments string) (string, error) {
+	value := jsontext.Value(arguments)
+	if value.Kind() == jsontext.KindBeginObject && value.IsValid() {
+		return arguments, nil
+	}
+	// Providers may reject their own malformed calls in history. Keep the raw
+	// arguments visible alongside the tool error in a replayable JSON object.
+	encoded, err := json.Marshal(struct {
+		InvalidArguments string `json:"invalid_arguments"`
+	}{InvalidArguments: arguments})
+	return string(encoded), err
 }
 
 func requestOutputMessageContent(message llm.Message) ([]openaiapi.OutputMessageContent, error) {
