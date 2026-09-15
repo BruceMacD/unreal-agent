@@ -15,6 +15,15 @@ from harbor.models.trajectories import Agent
 from harness_harbor.bundle import Bundle
 from harness_harbor.trajectory import convert
 
+APT_ARCHIVE_FALLBACK = (
+    "for f in /etc/apt/sources.list $(ls /etc/apt/sources.list.d/* 2>/dev/null); do "
+    "sed -i -E -e '/debian-security|security\\.debian\\.org/d' "
+    "-e 's#https?://deb\\.debian\\.org/debian([ /])"
+    "#http://archive.debian.org/debian\\1#g' "
+    '"$f" 2>/dev/null; done; '
+    "apt-get -o Acquire::Check-Valid-Until=false update"
+)
+
 
 class UnrealAgent(BaseInstalledAgent):
     SUPPORTS_ATIF = True
@@ -67,6 +76,7 @@ class UnrealAgent(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        await self.ensure_curl(environment)
         await self.exec_as_root(environment, command=f"mkdir -p {self._remote}")
         # Upload a verified snapshot so replacing the local file cannot mix binaries.
         with NamedTemporaryFile() as snapshot:
@@ -86,6 +96,21 @@ class UnrealAgent(BaseInstalledAgent):
                 f"{self._remote}/runner -h"
             ),
         )
+
+    # Terminal-Bench verifiers bootstrap their test runner with curl, and Harbor
+    # installs curl for every other installed agent before the agent runs. The
+    # runner itself needs nothing, but skipping this step leaves the verifier on
+    # an image without curl (or with an apt mirror that has moved to the archive)
+    # unable to run at all, so the trial scores zero regardless of the agent.
+    async def ensure_curl(self, environment: BaseEnvironment) -> None:
+        try:
+            await self.ensure_system_dependencies(environment, ("curl",))
+        except Exception as error:
+            self.logger.warning(
+                "curl install failed (%s); retrying with archive.debian.org", error
+            )
+            await self.exec_as_root(environment, command=APT_ARCHIVE_FALLBACK)
+            await self.ensure_system_dependencies(environment, ("curl",))
 
     @with_prompt_template
     @override
