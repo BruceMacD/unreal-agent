@@ -13,6 +13,8 @@ import (
 
 var retryAfterMessagePattern = regexp.MustCompile(`(?i)\btry again in\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|seconds?)\b`)
 
+// Providers report failures inconsistently, so this classifier intentionally
+// fails open, favoring retries.
 func retryableResponseError(err *APIError, retryableStatuses []int) bool {
 	if err == nil {
 		return false
@@ -29,6 +31,7 @@ func retryableResponseError(err *APIError, retryableStatuses []int) bool {
 	if err.StatusCode < http.StatusOK || err.StatusCode >= http.StatusMultipleChoices {
 		return slices.Contains(retryableStatuses, err.StatusCode)
 	}
+	return true
 }
 
 func responseRetryDelay(policy primitives.RemoteRetryPolicy, attempt int, err *APIError, headers http.Header, now time.Time, jitter float64) time.Duration {
