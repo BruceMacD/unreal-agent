@@ -31,6 +31,10 @@ Also supports `openrouter/<model>` with `OPENROUTER_API_KEY` and
 `fireworks_ai/<model>` with `FIREWORKS_AI_API_KEY`. Use Harbor's `--ae` option for
 environment overrides.
 
+OpenRouter requests opt into OpenRouter's automatic prompt caching with a one-hour
+TTL and carry the session id, so Anthropic and other explicit-breakpoint upstreams
+cache the growing conversation, keep it on one upstream, and keep it across long
+tool calls and reasoning turns.
 
 For Terminal-Bench 4.0 on Modal, configure Modal credentials and run:
 

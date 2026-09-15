@@ -42,6 +42,7 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 			Stream         *bool   `json:"stream"`
 			CacheControl   *struct {
 				Type string `json:"type"`
+				TTL  string `json:"ttl"`
 			} `json:"cache_control"`
 		}
 		if err := json.UnmarshalRead(request.Body, &body); err != nil {
@@ -50,6 +51,7 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 		if body.Model != "openai/gpt-test" || (body.Stream == nil || !*body.Stream) {
 			t.Errorf("body = %#v", body)
 		}
+		if body.CacheControl == nil || body.CacheControl.Type != "ephemeral" || body.CacheControl.TTL != "1h" {
 			t.Errorf("cache_control = %#v", body.CacheControl)
 		}
 		if got := request.Header.Get("x-session-id"); got != cacheKey || body.PromptCacheKey != nil {
