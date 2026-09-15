@@ -86,6 +86,7 @@ func TestRequestBodyReportsToolArgumentEncodingError(t *testing.T) {
 	_, err := requestBody(llm.Request{Input: []llm.Item{{
 		Type: llm.ItemToolCall,
 		Data: llm.ToolCall{CallID: "call-1", Name: "Bash", Arguments: "\xff"},
+	}}}, "", nil)
 	if err == nil || !strings.Contains(err.Error(), `input item 0: encode tool call "call-1" arguments:`) {
 		t.Fatalf("error = %v, want the argument encoding error with call context", err)
 	}
@@ -126,6 +127,7 @@ func TestRequestBodyRejectsInvalidItemPayloads(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			_, err := requestBody(llm.Request{Input: []llm.Item{test.item}}, "", nil)
 			if err == nil || err.Error() != test.want {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
@@ -203,6 +205,7 @@ func TestRequestInputItemReplaysRawReasoningVerbatim(t *testing.T) {
 }
 
 func TestRequestBodyOmitsUnsetMaxOutputTokens(t *testing.T) {
+	body, err := requestBody(validRequest(), "", nil)
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
@@ -218,6 +221,7 @@ func TestRequestBodyOmitsUnsetMaxOutputTokens(t *testing.T) {
 func TestRequestBodyEncodesReasoningEffort(t *testing.T) {
 	body, err := requestBody(llm.Request{
 		Model: llm.Model{ID: "gpt-test", ReasoningEffort: llm.ReasoningEffortHigh},
+	}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +242,7 @@ func TestRequestBodyEncodesReasoningEffort(t *testing.T) {
 func TestRequestBodyRejectsUnsupportedReasoningEffort(t *testing.T) {
 	_, err := requestBody(llm.Request{
 		Model: llm.Model{ID: "gpt-test", ReasoningEffort: "maximum"},
+	}, "", nil)
 	if err == nil || err.Error() != `unsupported reasoning effort "maximum"` {
 		t.Fatalf("error = %v", err)
 	}
@@ -251,6 +256,7 @@ func TestRequestBodyEncodesHostedWebSearch(t *testing.T) {
 			Data: llm.Message{Role: llm.RoleUser, Text: "latest news"},
 		}},
 		Tools: []llm.Tool{{Type: llm.ToolHosted, Name: "web_search"}},
+	}, "", nil)
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
@@ -271,6 +277,7 @@ func TestRequestBodyEncodesHostedWebSearch(t *testing.T) {
 func TestRequestBodyRejectsUnsupportedHostedTool(t *testing.T) {
 	_, err := requestBody(llm.Request{
 		Tools: []llm.Tool{{Type: llm.ToolHosted, Name: "unknown"}},
+	}, "", nil)
 	if err == nil || err.Error() != `tool 0: unsupported hosted tool name "unknown"` {
 		t.Fatalf("error = %v", err)
 	}
@@ -279,6 +286,7 @@ func TestRequestBodyRejectsUnsupportedHostedTool(t *testing.T) {
 func TestRequestBodyRejectsUnsupportedToolType(t *testing.T) {
 	_, err := requestBody(llm.Request{
 		Tools: []llm.Tool{{Name: "weather"}},
+	}, "", nil)
 	if err == nil || err.Error() != `tool 0: unsupported tool type ""` {
 		t.Fatalf("error = %v", err)
 	}
@@ -300,10 +308,12 @@ func TestRequestBodyIsByteStableAcrossEncodings(t *testing.T) {
 			"required": []any{"command"},
 		},
 	}}
+	first, err := requestBody(request, "session-1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for attempt := range 64 {
+		body, err := requestBody(request, "session-1", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -316,6 +326,7 @@ func TestRequestBodyIsByteStableAcrossEncodings(t *testing.T) {
 func TestRequestBodyEncodesMaxReasoningEffort(t *testing.T) {
 	body, err := requestBody(llm.Request{
 		Model: llm.Model{ID: "gpt-test", ReasoningEffort: llm.ReasoningEffortMax},
+	}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,5 +340,44 @@ func TestRequestBodyEncodesMaxReasoningEffort(t *testing.T) {
 	}
 	if request.Reasoning.Effort != "max" {
 		t.Fatalf("reasoning = %#v", request.Reasoning)
+	}
+}
+
+func TestRequestBodyMergesExtensions(t *testing.T) {
+	body, err := requestBody(validRequest(), "", map[string]jsontext.Value{
+		"cache_control": jsontext.Value(`{"type":"ephemeral"}`),
+		"provider":      jsontext.Value(`{"only":["anthropic"]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Model        string `json:"model"`
+		Stream       bool   `json:"stream"`
+		CacheControl struct {
+			Type string `json:"type"`
+		} `json:"cache_control"`
+		Provider struct {
+			Only []string `json:"only"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != "gpt-test" || !request.Stream || request.CacheControl.Type != "ephemeral" || !reflect.DeepEqual(request.Provider.Only, []string{"anthropic"}) {
+		t.Fatalf("request = %s", body)
+	}
+}
+
+func TestRequestBodyRejectsExtensionsOverridingStandardFields(t *testing.T) {
+	for name, extensions := range map[string]map[string]jsontext.Value{
+		"standard field": {"model": jsontext.Value(`"other"`)},
+		"invalid JSON":   {"provider": jsontext.Value(`{"only":`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := requestBody(validRequest(), "", extensions); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
 	}
 }

@@ -55,6 +55,7 @@ func TestRequestBodyReplaysRejectedToolCallFromHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	body, err := requestBody(built.Request, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

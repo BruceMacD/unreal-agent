@@ -3,6 +3,7 @@ package responsesapi
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -56,6 +57,10 @@ type Config struct {
 	MaxAttempts *int
 	// Trace borrows read-only bodies: request JSON and terminal response JSON or HTTP error.
 	Trace func(Exchange)
+	// Extensions are provider-specific top-level fields merged into every request
+	// body, such as OpenRouter's automatic prompt caching and upstream routing.
+	// A key that names a standard Responses API field is rejected per request.
+	Extensions map[string]jsontext.Value
 }
 
 type adapter struct {
@@ -65,6 +70,7 @@ type adapter struct {
 	trace             func(Exchange)
 	cacheKeyPlacement CacheKeyPlacement
 	maxAttempts       int
+	extensions        map[string]jsontext.Value
 }
 
 var _ llm.Adapter = (*adapter)(nil)
@@ -90,6 +96,7 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 		trace:             config.Trace,
 		cacheKeyPlacement: config.CacheKeyPlacement,
 		maxAttempts:       maxAttempts,
+		extensions:        config.Extensions,
 	}, nil
 }
 
@@ -102,6 +109,7 @@ func (adapter *adapter) Respond(ctx context.Context, request llm.Request, option
 	if adapter.cacheKeyPlacement.UsePromptCacheKeyField {
 		promptCacheKey = key
 	}
+	body, err := requestBody(request, promptCacheKey, adapter.extensions)
 	if err != nil {
 		return llm.Response{}, err
 	}

@@ -31,6 +31,7 @@ Also supports `openrouter/<model>` with `OPENROUTER_API_KEY` and
 `fireworks_ai/<model>` with `FIREWORKS_AI_API_KEY`. Use Harbor's `--ae` option for
 environment overrides.
 
+
 For Terminal-Bench 4.0 on Modal, configure Modal credentials and run:
 
 ```sh

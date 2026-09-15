@@ -10,6 +10,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
+func requestBody(request llm.Request, promptCacheKey string, extensions map[string]jsontext.Value) ([]byte, error) {
 	input, err := requestInput(request.Input)
 	if err != nil {
 		return nil, err
@@ -56,6 +57,31 @@ import (
 	if err != nil {
 		return nil, fmt.Errorf("encode response request: %w", err)
 	}
+	if len(extensions) == 0 {
+		return body, nil
+	}
+	return extendRequestBody(body, extensions)
+}
+
+func extendRequestBody(body []byte, extensions map[string]jsontext.Value) ([]byte, error) {
+	var fields map[string]jsontext.Value
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("decode response request: %w", err)
+	}
+	for name, value := range extensions {
+		if _, standard := fields[name]; standard {
+			return nil, fmt.Errorf("request extension %q overrides a Responses API field", name)
+		}
+		if !value.IsValid() {
+			return nil, fmt.Errorf("request extension %q is not valid JSON", name)
+		}
+		fields[name] = value
+	}
+	extended, err := json.Marshal(fields, json.Deterministic(true))
+	if err != nil {
+		return nil, fmt.Errorf("encode response request: %w", err)
+	}
+	return extended, nil
 }
 
 func requestInput(items []llm.Item) (openaiapi.InputParam, error) {

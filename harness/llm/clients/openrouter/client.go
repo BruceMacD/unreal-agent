@@ -1,6 +1,7 @@
 package openrouter
 
 import (
+	"encoding/json/jsontext"
 	"errors"
 	"strings"
 
@@ -44,6 +45,12 @@ func NewClient(config Config) (*Client, error) {
 		Trace:             config.Trace,
 		MaxAttempts:       config.MaxAttempts,
 		CacheKeyPlacement: responsesapi.CacheKeyPlacement{Header: "x-session-id"},
+		// OpenRouter only caches prompts for upstreams that need explicit breakpoints
+		// (Anthropic among them) when the request opts in; the top-level field places
+		// the breakpoint on the last cacheable block and moves it forward each turn.
+		// With the x-session-id header, every turn of a session lands on one warm upstream.
+		Extensions: map[string]jsontext.Value{
+		},
 	})
 	if err != nil {
 		_ = remote.Close()

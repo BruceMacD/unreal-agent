@@ -40,6 +40,7 @@ func TestSubmittedPrefixAndLateResultOrderOnWire(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			beforeBody, err := requestBody(before.Request, "session", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,6 +54,7 @@ func TestSubmittedPrefixAndLateResultOrderOnWire(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			afterBody, err := requestBody(after.Request, "session", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

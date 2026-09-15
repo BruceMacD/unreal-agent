@@ -40,12 +40,17 @@ func TestClientCallsResponsesAPI(t *testing.T) {
 			PromptCacheKey *string `json:"prompt_cache_key"`
 			Model          string  `json:"model"`
 			Stream         *bool   `json:"stream"`
+			CacheControl   *struct {
+				Type string `json:"type"`
+			} `json:"cache_control"`
 		}
 		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		if body.Model != "openai/gpt-test" || (body.Stream == nil || !*body.Stream) {
 			t.Errorf("body = %#v", body)
+		}
+			t.Errorf("cache_control = %#v", body.CacheControl)
 		}
 		if got := request.Header.Get("x-session-id"); got != cacheKey || body.PromptCacheKey != nil {
 			t.Errorf("cache placement: header = %q, body = %v", got, body.PromptCacheKey)
