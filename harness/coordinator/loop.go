@@ -33,6 +33,8 @@ type coordinator struct {
 }
 
 type stopState struct {
+	request               inbox.ControlMessage
+	cancellationRequested bool // Once set, no new nonterminal operations may enter coordinator state.
 }
 
 type loopState struct {
@@ -154,6 +156,8 @@ func (current *coordinator) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if current.stop.request.Mode == inbox.StopHard {
+			stopped, err := current.handleStop()
 			if err != nil {
 				return err
 			}
@@ -224,14 +228,28 @@ func (current *coordinator) processModelResponse(ctx context.Context, modelRespo
 	if err != nil {
 		return err
 	}
+	for _, status := range statuses {
+		for _, value := range status.Operations {
+			if err := current.dispatchOperationToManager(value); err != nil {
+				return err
+			}
+		}
+	}
 	if !current.state.callModel && len(statuses) > 0 {
 		current.state.grace = time.After(toolCallRunGracePeriod)
 	}
 	return nil
 }
 
+func (current *coordinator) handleStop() (bool, error) {
+	if !current.stop.cancellationRequested {
 		current.interruptModel()
+		if err := current.cancelOperations(); err != nil {
+			return false, err
+		}
+		current.stop.cancellationRequested = true
 	}
+	return !current.hasPendingOperations(), nil
 }
 
 func (current *coordinator) isIdle() bool {
@@ -240,6 +258,7 @@ func (current *coordinator) isIdle() bool {
 }
 
 func (current *coordinator) isWaitingForOnlyToolCalls() bool {
+	return current.cancelModel == nil && current.stop.request.Mode != inbox.StopHard &&
 		current.pendingInputs() == 0 && len(current.state.toolCalls) != 0
 }
 
@@ -263,6 +282,7 @@ func (current *coordinator) interruptModel() {
 }
 
 func (current *coordinator) acceptStop(request inbox.ControlMessage) {
+	if current.stop.request.Mode == inbox.StopHard {
 		return
 	}
 	current.stop.request = request
@@ -723,6 +743,7 @@ func (current *coordinator) scheduleToolCall(
 	translator, exists := current.dependencies.Tools.Resolve(call.Name)
 	toolContext := &toolCallContext{}
 	var status tool.CallStatus
+	if exists {
 		status = translator.Translate(toolContext, call)
 	} else {
 		status = tool.ErrorStatus(fmt.Sprintf("tool %q is not available", call.Name), 0)
@@ -879,7 +900,21 @@ func (current *coordinator) storeOperationInSessionStore(
 
 func (current *coordinator) dispatchOperationsToManager() error {
 	for _, value := range current.state.operations {
+		if err := current.dispatchOperationToManager(value); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func (current *coordinator) dispatchOperationToManager(value operation.Operation) error {
+	if operationIsTerminal(value.Status) {
+		return nil
+	}
+	value.State = value.State.Clone()
+	value.Idempotency = value.Idempotency.Clone()
+	if err := current.dependencies.Operations.Add(value); err != nil {
+		return fmt.Errorf("dispatch operation %q: %w", value.ID, err)
 	}
 	return nil
 }

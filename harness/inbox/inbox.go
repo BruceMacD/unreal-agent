@@ -58,6 +58,7 @@ func (input Input) DecodeControlMessage() (ControlMessage, error) {
 		return ControlMessage{}, fmt.Errorf("decode control message: %w", err)
 	}
 	switch request.Mode {
+	case StopHard, StopWhenIdle:
 	case Heartbeat:
 		if request.Reason == "" {
 			return ControlMessage{}, fmt.Errorf("heartbeat reason is empty")

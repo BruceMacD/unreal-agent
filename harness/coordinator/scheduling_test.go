@@ -10,12 +10,64 @@ import (
 	"testing/synctest"
 
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
+	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
+
+func TestCoordinatorRunReturnsDispatchErrorForNewOperation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newToolGraceTestRun(t)
+		want := errors.New("dispatch failed")
+		run.operations.addError = func(operation.Operation) error { return want }
+		run.start(t)
+		run.input(t, externalEvent(t, 0, "input", "run tool"))
+		run.respond(t, 0, toolGraceResponse("A"))
+		select {
+		case err := <-run.done:
+			if !errors.Is(err, want) {
+				t.Fatalf("Run error = %v, want %v", err, want)
+			}
+		default:
+			t.Fatal("Run did not return the dispatch error")
+		}
+		if len(run.calls) != 1 || len(run.store.appendedStatuses) != 1 || len(run.operations.adds) != 1 {
+			t.Fatal("dispatch failure started another turn or failed to preserve the committed operation")
+		}
+		if !reflect.DeepEqual(run.store.appendedStatuses[0].Operations, run.operations.adds) {
+			t.Fatal("dispatched operation differs from its committed state")
+		}
+	})
+}
+
+func TestCoordinatorDispatchesOnlyNewToolOperations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newToolGraceTestRun(t)
+		run.start(t)
+		run.input(t, externalEvent(t, 0, "first", "run tool"))
+		run.respond(t, 0, toolGraceResponse("A"))
+		run.input(t, externalEvent(t, 1, "second", "run another tool"))
+		run.respond(t, 1, toolGraceResponse("B"))
+		updateToolGraceCall(t, run, "A", operation.StatusAwaiting)
+		run.input(t, heartbeatInput(t, "heartbeat"))
+		run.respond(t, 2, textResponse("Waiting."))
+		if len(run.operations.adds) != 2 || run.operations.adds[0].ID == run.operations.adds[1].ID {
+			t.Fatalf("operation dispatches = %#v, want each new operation once", run.operations.adds)
+		}
+		run.input(t, stopInput(t, "stop", inbox.StopWhenIdle))
+		updateToolGraceCall(t, run, "A", operation.StatusCompleted)
+		updateToolGraceCall(t, run, "B", operation.StatusCompleted)
+		run.respond(t, 3, textResponse("A completed."))
+		run.respond(t, 4, textResponse("B completed."))
+		run.assertStopped(t)
+		if len(run.operations.adds) != 2 {
+			t.Fatal("result delivery redispatched operations")
+		}
+	})
+}
 
 func TestCoordinatorSchedulingResultFailurePreventsDispatch(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

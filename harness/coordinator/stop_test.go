@@ -74,9 +74,41 @@ func TestCoordinatorWhenIdleDeliversPendingResults(t *testing.T) {
 }
 
 func TestCoordinatorStopsAfterCancellationIsRecorded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newStopTestRun(t, 2)
+		run.start(t)
+		run.input(t, externalEvent(t, 1, "progress", "check progress"))
+		run.input(t, stopInput(t, "stop", inbox.StopHard))
+		if !errors.Is(run.calls[0].ctx.Err(), context.Canceled) {
+			t.Fatal("stop did not interrupt active model request")
+		}
+		if len(run.operations.cancels) != 2 {
+			t.Fatalf("cancellations = %v, want both operations", run.operations.cancels)
+		}
+		for _, reason := range run.operations.cancelReasons {
+			if reason != "user requested stop" {
+				t.Fatalf("cancellation reason = %q", reason)
+			}
+		}
+		run.assertRunning(t)
+		run.update(t, 0, operation.StatusCanceled)
+		run.assertRunning(t)
+		run.update(t, 1, operation.StatusCompleted)
+		if len(run.store.savedOperations) != 2 || len(run.store.appendedStatuses) != 2 {
+			t.Fatal("stop did not persist terminal updates and tool results")
+		}
+		if len(run.calls) != 1 {
+			t.Fatal("hard stop started another request")
+		}
+		run.assertStopped(t)
+		if len(run.operations.cancels) != 2 {
+			t.Fatal("operation cancellation was requested more than once")
+		}
+	})
 }
 
 func TestCoordinatorCancelsCompactionWithoutRecordingAResponse(t *testing.T) {
+	for _, mode := range []inbox.ControlMode{inbox.StopHard, "steer"} {
 		t.Run(string(mode), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 0)
@@ -109,6 +141,7 @@ func TestCoordinatorCancelsCompactionWithoutRecordingAResponse(t *testing.T) {
 					if len(run.calls) != 2 || run.current.cancelModel == nil {
 						t.Fatal("late response affected the replacement request")
 					}
+					run.input(t, stopInput(t, "idle", inbox.StopWhenIdle))
 					run.respond(t, 1, textResponse("Done"))
 				}
 				run.assertStopped(t)
@@ -117,22 +150,56 @@ func TestCoordinatorCancelsCompactionWithoutRecordingAResponse(t *testing.T) {
 	}
 }
 
+func TestCoordinatorHardStopOverridesWhenIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		run := newStopTestRun(t, 1)
 		run.start(t)
+		run.input(t, externalEvent(t, 0, "first", "hello"))
+		run.input(t, stopInput(t, "idle", inbox.StopWhenIdle))
+		if run.calls[0].ctx.Err() != nil {
+			t.Fatal("when_idle interrupted the model")
+		}
+		run.input(t, stopInput(t, "hard", inbox.StopHard))
+		run.input(t, stopInput(t, "idle-again", inbox.StopWhenIdle), stopInput(t, "hard-again", inbox.StopHard), heartbeatInput(t, "heartbeat"), externalEvent(t, 1, "late", "more work"))
+		run.assertRunning(t)
+		if run.current.stop.request.Mode != inbox.StopHard || len(run.operations.cancels) != 1 {
+			t.Fatal("later inputs changed the stop or repeated cancellation")
 		}
 		if len(run.calls) != 1 || !errors.Is(run.calls[0].ctx.Err(), context.Canceled) {
+			t.Fatal("hard stop did not interrupt the model or later input started another request")
+		}
+		run.update(t, 0, operation.StatusCanceled)
+		run.assertStopped(t)
+		if len(run.operations.cancels) != 1 || len(run.calls) != 1 {
+			t.Fatal("stop repeated cancellation or started another model request")
 		}
 	})
 }
 
+func TestCoordinatorHardStopDiscardsLateModelResponse(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		run := newStopTestRun(t, 1)
+		run.current.dependencies.LLM = &fakeAdapter{respond: func(ctx context.Context, request llm.Request) (llm.Response, error) {
+			call := stopTestCall{ctx: ctx, request: request, response: make(chan llm.Response)}
+			run.calls = append(run.calls, call)
+			return <-call.response, nil
+		}}
 		run.start(t)
+		run.input(t, externalEvent(t, 0, "first", "hello"))
+		run.input(t, stopInput(t, "stop", inbox.StopHard))
+		run.assertRunning(t)
+		run.respond(t, 0, llm.Response{Output: []llm.Item{{
+		}}})
+		if len(run.store.appendedResponses) != 0 || len(run.store.appendedStatuses) != 0 || len(run.calls) != 1 {
+			t.Fatal("late response was recorded or translated during cancellation")
 		}
+		run.update(t, 0, operation.StatusCanceled)
 		run.assertStopped(t)
 	})
 }
 
 func TestCoordinatorStopPropagatesErrors(t *testing.T) {
+	for _, failure := range []string{"input", "cancel", "operation", "tool-result"} {
 		t.Run(failure, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 2)
@@ -144,8 +211,12 @@ func TestCoordinatorStopPropagatesErrors(t *testing.T) {
 					run.operations.cancelErr = want
 				case "operation":
 					run.store.saveOperationErr = want
+				case "tool-result":
+					run.store.appendStatusErr = want
 				}
 				run.start(t)
+				run.input(t, stopInput(t, "stop", inbox.StopHard))
+				if failure == "operation" || failure == "tool-result" {
 					run.update(t, 0, operation.StatusCanceled)
 				}
 				select {
@@ -266,6 +337,7 @@ func TestCoordinatorCancellationTakesPrecedenceOverModelError(t *testing.T) {
 }
 
 func TestCoordinatorStopControlsDoNotRepeatOnResume(t *testing.T) {
+	for _, mode := range []inbox.ControlMode{inbox.StopHard, inbox.StopWhenIdle} {
 		t.Run(string(mode), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 0)

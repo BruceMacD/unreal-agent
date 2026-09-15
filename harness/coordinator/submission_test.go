@@ -179,6 +179,7 @@ func (store *submissionFailureStore) AppendModelResponse(ctx context.Context, id
 }
 
 func TestCoordinatorRecoversPendingResultsAfterInputWriteFailure(t *testing.T) {
+	for _, kind := range []string{"external", "heartbeat", "hard stop"} {
 		t.Run(kind, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 2)
@@ -195,6 +196,8 @@ func TestCoordinatorRecoversPendingResultsAfterInputWriteFailure(t *testing.T) {
 				switch kind {
 				case "heartbeat":
 					input = stopInput(t, "unpersisted", inbox.Heartbeat)
+				case "hard stop":
+					input = stopInput(t, "unpersisted", inbox.StopHard)
 				}
 				failure := errors.New("input write failed")
 				faults.inputErr = failure
@@ -298,7 +301,41 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 	})
 }
 
+func TestCoordinatorHardStopPreservesPendingInputsOnReplay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newStopTestRun(t, 2)
+		store := persistTestRun(t, run)
+		restoreTestRun(t, run, store)
+		run.start(t)
+		run.input(t, externalEvent(t, 0, "first", "check progress"))
+		want := run.calls[0].request
+		run.update(t, 0, operation.StatusCompleted)
+		run.input(t, stopInput(t, "hard", inbox.StopHard))
+		if len(run.calls) != 1 || run.calls[0].ctx.Err() == nil || len(run.operations.cancels) != 1 {
+			t.Fatal("hard stop failed to interrupt and cancel only pending work")
 		}
+		run.input(t, externalEvent(t, 1, "late", "follow up after stop"))
+		run.update(t, 1, operation.StatusCanceled)
+		run.assertStopped(t)
+		if len(run.calls) != 1 {
+			t.Fatal("hard stop started another model request")
+		}
+		want.Input = append(append([]llm.Item(nil), want.Input...),
+			llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "follow up after stop"}},
+		)
+		resumed := newStopTestRun(t, 0)
+		restoreTestRun(t, resumed, store)
+		resumed.start(t)
+		if len(resumed.calls) != 1 || !reflect.DeepEqual(resumed.calls[0].request, want) || len(resumed.operations.adds) != 0 || len(resumed.operations.cancels) != 0 {
+			t.Fatal("resume changed stop history, lost late input, or repeated operations")
+		}
+		resumed.input(t, stopInput(t, "idle", inbox.StopWhenIdle))
+		resumed.respond(t, 0, textResponse("Follow-up received."))
+		resumed.assertStopped(t)
+		if resumed.current.pendingInputs() != 0 || len(resumed.calls) != 1 {
+			t.Fatal("resumed stop history did not settle in one response")
+		}
+	})
 }
 
 type submissionTranslator struct {

@@ -1771,6 +1771,7 @@ func TestCoordinatorRunRejectsExternalInputWithoutTextPayload(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunStoresOperationUpdatesWithoutRedispatch(t *testing.T) {
 	store := emptyFakeStore()
 	initial := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
@@ -1802,6 +1803,8 @@ func TestCoordinatorRunRejectsExternalInputWithoutTextPayload(t *testing.T) {
 	if !reflect.DeepEqual(store.savedOperations, []operation.Operation{updated}) {
 		t.Fatalf("saved operations = %#v, want %#v", store.savedOperations, []operation.Operation{updated})
 	}
+	if !reflect.DeepEqual(operations.adds, []operation.Operation{initial}) {
+		t.Fatalf("dispatched operations = %#v, want only the initial operation", operations.adds)
 	}
 	if len(operations.cancels) != 0 || len(adapter.requests) != 0 {
 		t.Fatalf("unexpected effects: cancels=%v model=%v", operations.cancels, adapter.requests)

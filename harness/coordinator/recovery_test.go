@@ -128,6 +128,7 @@ func TestCoordinatorResumesUnansweredInput(t *testing.T) {
 }
 
 func TestCoordinatorStopRejectsUnsupportedOperation(t *testing.T) {
+	for _, mode := range []inbox.ControlMode{inbox.StopHard, inbox.StopWhenIdle} {
 		t.Run(string(mode), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 1)

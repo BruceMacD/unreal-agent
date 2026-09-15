@@ -300,6 +300,14 @@ func TestStoreRejectsLegacySessionResume(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsSoftStopHistory(t *testing.T) {
+	store := newStore(t, "testdata")
+	_, err := store.Resume(t.Context(), "soft-stop-session")
+	if err == nil || !strings.Contains(err.Error(), `unsupported control mode "soft"`) {
+		t.Fatalf("Resume error = %v, want unsupported soft-stop control", err)
+	}
+}
+
 func TestStoreAppendsJSONLRecords(t *testing.T) {
 	directory := t.TempDir()
 	store := newStore(t, directory)

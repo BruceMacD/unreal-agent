@@ -167,14 +167,25 @@ func TestCoordinatorResumesPartiallyCompletedToolCall(t *testing.T) {
 }
 
 func TestCoordinatorRetriesRecoveryPersistenceFailures(t *testing.T) {
+	for _, failure := range []string{"reconciliation", "initial-build", "initial-turn"} {
 		t.Run(failure, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 1)
 				store := persistTestRun(t, run)
 				want := errors.New("injected failure")
 				faults := &recoveryFailureStore{Store: store}
+				terminal := operation.StatusCompleted
+				value := run.store.resume.Operations[0]
+				value.Status = terminal
+				if err := store.SaveOperation(t.Context(), "session-1", value); err != nil {
+					t.Fatal(err)
+				}
 				switch failure {
+				case "reconciliation":
+					faults.statusErr = want
+				case "initial-build":
 					run.current.dependencies.ContextBuilder = failingBuilder{Builder: run.current.dependencies.ContextBuilder, err: want}
+				case "initial-turn":
 					faults.turnErr = want
 				}
 				restoreTestRun(t, run, faults)

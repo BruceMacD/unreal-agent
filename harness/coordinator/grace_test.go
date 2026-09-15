@@ -172,6 +172,7 @@ func TestCoordinatorImmediateToolStatusBypassesGrace(t *testing.T) {
 }
 
 func TestCoordinatorStopDuringToolGracePeriod(t *testing.T) {
+	for _, mode := range []inbox.ControlMode{inbox.StopHard, inbox.StopWhenIdle} {
 		t.Run(string(mode), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newToolGraceTestRun(t)
@@ -194,6 +195,7 @@ func TestCoordinatorStopDuringToolGracePeriod(t *testing.T) {
 				updateToolGraceCall(t, run, "A", terminal)
 				if mode != inbox.StopHard {
 					if run.requestCount() != 2 {
+						t.Fatal("when_idle waited for grace expiry before delivering the result")
 					}
 					assertStopResult(t, run.calls[1].request, "A", string(terminal))
 					run.respond(t, 1, textResponse("Done."))

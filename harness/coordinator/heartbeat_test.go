@@ -212,6 +212,20 @@ func TestHeartbeatWaitsForAllOperationsOfCall(t *testing.T) {
 }
 
 func TestCoordinatorHeartbeatStopsDuringCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		run := newHeartbeatTestRun(t, 1)
+		run.current.dependencies.ToolHeartbeatInterval = time.Minute
+		run.start(t)
+		advanceHeartbeatTime(30 * time.Second)
+		run.input(t, stopInput(t, "stop", inbox.StopHard))
+		advanceHeartbeatTime(3 * time.Minute)
+		assertHeartbeatCount(t, run, 0)
+		if run.requestCount() != 0 {
+			t.Fatal("heartbeat ran during cancellation")
+		}
+		run.update(t, 0, operation.StatusCanceled)
+		run.assertStopped(t)
+	})
 }
 
 func TestHeartbeatControlPreservesWhenIdleStop(t *testing.T) {
