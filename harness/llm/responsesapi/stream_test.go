@@ -66,6 +66,7 @@ func TestResponsesStreamFailures(t *testing.T) {
 		{name: "wrong content type", contentType: "application/json", body: completedResponse, match: "without a terminal response"},
 		{name: "nonterminal response status", contentType: "text/event-stream", body: "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"in_progress\"}}\n\n", match: "unsupported response status"},
 		{name: "error event", contentType: "text/event-stream", body: "data: {\"type\":\"error\",\"code\":\"usage_limit_reached\",\"message\":\"limit reached\"}\n\n", match: "limit reached", code: "usage_limit_reached"},
+		{name: "error event nested", contentType: "text/event-stream", body: "data: {\"type\":\"error\",\"error\":{\"type\":\"insufficient_quota\",\"code\":\"credit_balance_exhausted\",\"message\":\"You have no credits remaining.\"}}\n\n", match: "no credits remaining", code: "credit_balance_exhausted"},
 		{name: "unauthorized", status: 401, contentType: "application/json", body: `{"error":{"code":"invalid_token","message":"expired"}}`, match: "expired", code: "invalid_token"},
 		{name: "quota", status: 429, contentType: "application/json", body: `{"error":{"code":"usage_limit_reached","message":"quota"}}`, match: "quota", code: "usage_limit_reached"},
 	} {

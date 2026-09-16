@@ -21,11 +21,13 @@ func retryableResponseError(err *APIError, retryableStatuses []int) bool {
 	}
 	switch err.Code {
 	case "context_length_exceeded", "insufficient_quota", "usage_not_included", "usage_limit_reached",
+		"credit_balance_exhausted", "billing_hard_limit_reached",
 		"cyber_policy", "misalignment_policy_violation", "invalid_prompt", "bio_policy",
 		"invalid_api_key", "invalid_token":
 		return false
 	}
 	switch err.Type {
+	case "authentication_error", "permission_error", "insufficient_quota":
 		return false
 	}
 	if err.StatusCode < http.StatusOK || err.StatusCode >= http.StatusMultipleChoices {

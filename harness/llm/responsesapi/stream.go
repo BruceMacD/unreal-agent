@@ -154,6 +154,12 @@ func (state *responseState) observe(data []byte) error {
 		Code        string         `json:"code"`
 		Message     string         `json:"message"`
 		Param       string         `json:"param"`
+		Error       *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Param   string `json:"param"`
+			Type    string `json:"type"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		return fmt.Errorf("invalid Responses stream event JSON: %w", err)
@@ -176,6 +182,27 @@ func (state *responseState) observe(data []byte) error {
 		state.items[*event.OutputIndex] = event.Item
 	}
 	if event.Type == "error" {
+		// The provider nests code/message under an "error" object as often as it
+		// puts them at the top level (e.g. an in-band credit_balance_exhausted
+		// failure). Read both so the surfaced error is diagnosable and classifiable
+		// instead of an opaque empty "status 200:".
+		code, message, param, kind := event.Code, event.Message, event.Param, ""
+		if event.Error != nil {
+			if code == "" {
+				code = event.Error.Code
+			}
+			if message == "" {
+				message = event.Error.Message
+			}
+			if param == "" {
+				param = event.Error.Param
+			}
+			kind = event.Error.Type
+		}
+		if kind == "" {
+			kind = "error"
+		}
+		state.err = &APIError{StatusCode: http.StatusOK, Code: code, Message: message, Param: param, Type: kind}
 	}
 	return nil
 }

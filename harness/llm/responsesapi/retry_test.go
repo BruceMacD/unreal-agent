@@ -156,3 +156,19 @@ func TestAdapterDoesNotRetryMissingRequiredParameter(t *testing.T) {
 		t.Fatalf("error = %v, attempts = %d", err, attempts.Load())
 	}
 }
+
+func TestDoesNotRetryTerminalInBandErrors(t *testing.T) {
+	// A 200 stream that carries an in-band terminal failure (e.g. credit_balance_exhausted,
+	// nested under "error") must surface the error and NOT be retried.
+	for _, c := range []struct {
+		name string
+		err  *APIError
+	}{
+		{"credit_balance_exhausted code", &APIError{StatusCode: 200, Code: "credit_balance_exhausted", Message: "You have no credits remaining.", Type: "insufficient_quota"}},
+		{"insufficient_quota type", &APIError{StatusCode: 200, Message: "quota", Type: "insufficient_quota"}},
+	} {
+		if retryableResponseError(c.err, nil) {
+			t.Fatalf("%s: expected non-retryable, got retryable", c.name)
+		}
+	}
+}
