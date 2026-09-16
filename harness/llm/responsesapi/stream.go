@@ -168,6 +168,7 @@ func (state *responseState) observe(data []byte) error {
 	if event.Type == "response.output_item.done" {
 		item := bytes.TrimSpace(event.Item)
 		if event.OutputIndex == nil || *event.OutputIndex < 0 || len(item) == 0 || item[0] != '{' {
+			return nil
 		}
 		if state.items == nil {
 			state.items = make(map[int]jsontext.Value)
