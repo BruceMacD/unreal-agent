@@ -127,6 +127,7 @@ func (adapter *adapter) Respond(ctx context.Context, request llm.Request, option
 }
 
 const modelResponseIdleTimeout = 30 * time.Minute
+const maxSSEFrameBytes = 256 << 20
 
 func (adapter *adapter) remoteRequest(body []byte, cacheKey string) primitives.RemoteRequest {
 	correlationID := primitives.CorrelationID(uuid.New().String())
