@@ -65,6 +65,7 @@ func staticDefinitions() []Definition {
 func maxOutputLengthSchema() map[string]any {
 	return map[string]any{
 		"type":        "integer",
+		"description": fmt.Sprintf("Maximum characters per output text field. Truncated text keeps its head and tail, around a marker stating how much was omitted, and path to the file with the complete stream. Defaults to %d.", operation.DefaultMaxOutputLength),
 		"minimum":     1,
 		"maximum":     operation.MaxOutputLength,
 		"default":     operation.DefaultMaxOutputLength,

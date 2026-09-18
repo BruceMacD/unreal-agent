@@ -750,6 +750,7 @@ func TestShellReadsActualTailWithBoundedState(t *testing.T) {
 		{"odd Unicode budget", strings.Repeat("🙂", 20), "🙂...68 bytes truncated...🙂🙂", 3},
 		{"split UTF8 boundaries", "界é" + strings.Repeat("🙂", 20) + "好é界", "界é🙂...76 bytes truncated...好é界", 6},
 		{"invalid UTF8", "AB" + strings.Repeat("x", 100) + "\xff\xfeZ", "AB...100 bytes truncated...��Z", 5},
+		{"control characters", "\n\"" + strings.Repeat("x", 100) + "\x00\\\t", "\n\"xxxx...93 bytes truncated...xxx\x00\\\t", 12},
 		{"one character", "start" + strings.Repeat("x", 100) + "end", "...107 bytes truncated...d", 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {

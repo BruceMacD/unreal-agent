@@ -29,6 +29,17 @@ func TestBoundOutputPreservesHeadAndTail(t *testing.T) {
 		{"ellipsis", "…abc…", "…...3 bytes truncated...…", 2, true},
 		{"invalid UTF8", "a\xff\xfeb", "a��b", 4, false},
 		{"invalid UTF8 truncated", "a\xffbc\xfed", "a�...2 bytes truncated...�d", 4, true},
+		{"unicode and newline exact", "é\n🙂", "é\n🙂", 3, false},
+		{"unicode and newline truncated", "é\n🙂", "é...1 bytes truncated...🙂", 2, true},
+		{"unicode and whitespace", "é\n中🙂\t界", "é\n...7 bytes truncated...\t界", 4, true},
+		{"whitespace", "a\nbc\td", "a\n...2 bytes truncated...\td", 4, true},
+		{"newline", "\n", "\n", 1, false},
+		{"quote", `"`, `"`, 1, false},
+		{"backslashes", `\\`, `\\`, 2, false},
+		{"literal escape", `\u1234`, `\...4 bytes truncated...4`, 2, true},
+		{"control characters", "\x00ab\x1f", "\x00...2 bytes truncated...\x1f", 2, true},
+		{"control character tail", "\x00ab\x1f", "...3 bytes truncated...\x1f", 1, true},
+		{"unicode separators", "<>&\u2028\u2029", "<>&\u2028\u2029", 5, false},
 		{"zero", "abc", "...3 bytes truncated...", 0, true},
 		{"negative", "abc", "...3 bytes truncated...", -1, true},
 		{"maximum", "HEAD" + strings.Repeat("x", operation.MaxOutputLength) + "TAIL", "HEAD" + strings.Repeat("x", 499996) + "...8 bytes truncated..." + strings.Repeat("x", 499996) + "TAIL", operation.MaxOutputLength, true},
@@ -42,19 +53,24 @@ func TestBoundOutputPreservesHeadAndTail(t *testing.T) {
 				t.Fatal("output is invalid UTF-8")
 			}
 			retained := regexp.MustCompile(`\.\.\.[0-9]+ bytes truncated\.\.\.`).ReplaceAllString(got, "")
+			if utf8.RuneCountInString(retained) > max(0, test.limit) {
+				t.Fatalf("retained text uses %d characters, limit %d", utf8.RuneCountInString(retained), test.limit)
 			}
 		})
 	}
 }
 
+func TestBoundOutputCharacterBoundaries(t *testing.T) {
 	marker := regexp.MustCompile(`\.\.\.([0-9]+) bytes truncated\.\.\.`)
 	for _, text := range []string{
 		"\"\\/\b\f\n\r\t\x00\x1f",
 		`\u0000\\\"abcd\n`,
 		"é界🙂…<>&\u2028\u2029",
 	} {
+		for limit := range utf8.RuneCountInString(text) + 2 {
 			got, truncated := operation.BoundOutput(text, limit)
 			if !truncated {
+				if got != text || utf8.RuneCountInString(text) > limit {
 					t.Fatalf("limit %d: unexpected untruncated output %q", limit, got)
 				}
 				continue
@@ -75,6 +91,8 @@ func TestBoundOutputPreservesHeadAndTail(t *testing.T) {
 				if i == 1 {
 					budget = limit - budget
 				}
+				if !utf8.ValidString(part) || utf8.RuneCountInString(part) != budget {
+					t.Fatalf("limit %d: part %q does not fill its %d-character budget with valid UTF-8", limit, part, budget)
 				}
 			}
 		}

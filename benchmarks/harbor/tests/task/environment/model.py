@@ -4,6 +4,11 @@ import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+RUNNING = (
+    "Tool call is still running. Its result arrives in a later turn: "
+    "continue with independent work, or end your turn to wait for it."
+)
+
 
 class Model(BaseHTTPRequestHandler):
     def do_GET(self):

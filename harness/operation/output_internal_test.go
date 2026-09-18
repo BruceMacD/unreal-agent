@@ -20,6 +20,7 @@ func TestBoundOutputWithOptionalPath(t *testing.T) {
 		{"complete with path", "abcdef", "", "/capture", "ab...2 bytes truncated; complete output in /capture...ef", 6},
 		{"partial without path", "ab", "yz", "", "ab...6 bytes truncated...yz", 10},
 		{"partial with path", "ab", "yz", "/capture", "ab...6 bytes truncated; complete output in /capture...yz", 10},
+		{"partial with newline and backslash", "a\n", "\\z", "", "a\n...96 bytes truncated...\\z", 100},
 		{"partial with invalid UTF8", "a\xff", "\xfez", "", "a�...96 bytes truncated...�z", 100},
 		{"partial with unicode", "界é", "🙂好", "", "界é...88 bytes truncated...🙂好", 100},
 	} {

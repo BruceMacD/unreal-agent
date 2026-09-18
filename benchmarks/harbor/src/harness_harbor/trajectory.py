@@ -25,6 +25,45 @@ def bash_result(data: dict[str, Any]) -> str:
     operations = {op["ID"]: op for op in data.get("Operations", [])}
     waiting = status.get("WaitingFor") or []
     if status.get("Error"):
+        if waiting or operations:
+            raise ValueError("Bash call has both a validation error and operations")
+        return "Error: " + status["Error"]
+    if len(waiting) != 1:
+        raise ValueError(f"Bash call has {len(waiting)} operations, want 1")
+    op = operations[waiting[0]]
+    if op["Type"] != "shell":
+        raise ValueError(f"Unsupported operation type: {op['Type']}")
+    state = op["State"]
+    if op["Status"] in {"ready", "awaiting", "canceling"}:
+        return RUNNING
+    if op["Status"] not in TERMINAL:
+        raise ValueError(f"Unsupported operation status: {op['Status']}")
+
+    error = state.get("TerminalError") or ""
+    if not error and op["Status"] in {"failed", "canceled"}:
+        error = "shell operation " + op["Status"]
+    parts = []
+    value = state.get("Result")
+    if value is not None:
+        stdout, stderr = value["Out"], value["Err"]
+        if not isinstance(stdout, str) or not isinstance(stderr, str):
+            raise ValueError("Expected current runner text output")
+        if stdout:
+            parts.append(stdout)
+        if stderr:
+            parts.append("Stderr:\n" + stderr)
+        if value["ExitCode"] != 0:
+            parts.append(f"Exit code: {value['ExitCode']}")
+    elif op["Status"] == "completed":
+        raise ValueError("Completed shell operation has no result")
+    else:
+        if state.get("OutPath"):
+            parts.append("Stdout capture: " + state["OutPath"])
+        if state.get("ErrPath"):
+            parts.append("Stderr capture: " + state["ErrPath"])
+    if error:
+        parts.append("Error: " + error)
+    return "\n".join(parts) if parts else "(no output)"
 
 
     steps: list[Step] = []

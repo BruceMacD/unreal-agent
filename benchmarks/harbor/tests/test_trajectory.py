@@ -55,9 +55,99 @@ def status(state="completed", stdout="test", **fields):
 
 class TrajectoryTests(unittest.TestCase):
     def test_plain_text_is_not_base64_decoded(self):
+        for text in ("test", "1234", "aGVsbG8=", "😃\n", "", "{not JSON", '  "hi"\n\n'):
             with self.subTest(text=text):
+                self.assertEqual(
+                    bash_result(status(stdout=text)), text or "(no output)"
+                )
+
+    def test_preserves_inline_truncation_without_duplicate_metadata(self):
+        stdout = "head...92 bytes truncated; complete output in /out...tail"
+        stderr = "head...92 bytes truncated; complete output in /err...tail"
+        data = status(
+            Result={"Out": stdout, "Err": stderr, "ExitCode": 7},
+            OutTruncated=True,
+            ErrTruncated=True,
+            OutPath="/out",
+            ErrPath="/err",
+        )
+        self.assertEqual(
+            bash_result(data), f"{stdout}\nStderr:\n{stderr}\nExit code: 7"
+        )
+
+    def test_labels_stderr_and_nonzero_exit_codes(self):
+        for stdout, stderr, exit_code, expected in (
+            ("", "warning\n", 0, "Stderr:\nwarning\n"),
+            ("out\n", "err\n", 0, "out\n\nStderr:\nerr\n"),
+            ("out", "err", 7, "out\nStderr:\nerr\nExit code: 7"),
+            ("", "failed\n", 7, "Stderr:\nfailed\n\nExit code: 7"),
+            ("", "", 1, "Exit code: 1"),
+        ):
+            with self.subTest(stdout=stdout, stderr=stderr, exit_code=exit_code):
+                data = status(
+                    Result={"Out": stdout, "Err": stderr, "ExitCode": exit_code}
+                )
+                self.assertEqual(bash_result(data), expected)
 
     def test_running_and_failed_operations(self):
+        for state in ("ready", "awaiting", "canceling"):
+            with self.subTest(state=state):
+                self.assertEqual(bash_result(status(state=state, Result=None)), RUNNING)
+        for state in ("failed", "canceled"):
+            for error in ("", "shell stopped", "err...100 bytes truncated...end"):
+                with self.subTest(state=state, error=error):
+                    data = status(state=state, Result=None, TerminalError=error)
+                    self.assertEqual(
+                        bash_result(data),
+                        f"Error: {error or 'shell operation ' + state}",
+                    )
+
+    def test_failure_and_cancellation_preserve_available_captures(self):
+        for state in ("failed", "canceled"):
+            for fields, prefix in (
+                ({}, ""),
+                ({"OutPath": "/out"}, "Stdout capture: /out\n"),
+                ({"ErrPath": "/err"}, "Stderr capture: /err\n"),
+                (
+                    {"OutPath": "/out", "ErrPath": "/err"},
+                    "Stdout capture: /out\nStderr capture: /err\n",
+                ),
+            ):
+                with self.subTest(state=state, fields=fields):
+                    data = status(state=state, Result=None, **fields)
+                    self.assertEqual(
+                        bash_result(data), prefix + f"Error: shell operation {state}"
+                    )
+
+    def test_rejects_invalid_shell_results(self):
+        for data, message in (
+            ({"Status": {}}, "has 0 operations, want 1"),
+            (
+                {"Status": {"WaitingFor": ["op-1", "op-2"]}},
+                "has 2 operations, want 1",
+            ),
+            (
+                {**status(), "Status": {"Error": "bad arguments"}},
+                "both a validation error and operations",
+            ),
+            (status(Result=None), "Completed shell operation has no result"),
+            (status(state="unknown"), "Unsupported operation status"),
+            (
+                status(Result={"Out": None, "Err": "", "ExitCode": 0}),
+                "Expected current runner text output",
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                bash_result(data)
+
+    def test_truncated_validation_error_is_plain_text(self):
+        data = {
+            "Status": {
+                "Error": "bad...100 bytes truncated...JSON",
+                "ErrorTruncated": True,
+            }
+        }
+        self.assertEqual(bash_result(data), "Error: bad...100 bytes truncated...JSON")
 
     def test_internal_control_and_delayed_observations(self):
         tool_call = {
@@ -89,6 +179,7 @@ class TrajectoryTests(unittest.TestCase):
         self.assertEqual(observations[0].content, RUNNING)
         self.assertEqual(observations[0].extra["available_before_turn"], "turn-2")
         self.assertEqual(observations[1].extra["available_before_turn"], "turn-3")
+        self.assertEqual(observations[1].content, "test")
         self.assertEqual(trajectory.final_metrics.total_prompt_tokens, 30)
         self.assertEqual(trajectory.final_metrics.total_cached_tokens, 12)
         self.assertEqual(trajectory.final_metrics.total_completion_tokens, 9)
@@ -175,6 +266,8 @@ class TrajectoryTests(unittest.TestCase):
         self.assertEqual(trajectory.final_metrics.total_prompt_tokens, 10)
         self.assertEqual(trajectory.extra["runner_errors"], ["provider disconnected"])
         self.assertEqual(
+            trajectory.steps[0].observation.results[0].content,
+            "Error: bad JSON",
         )
 
 

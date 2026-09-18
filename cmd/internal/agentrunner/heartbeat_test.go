@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,9 +39,13 @@ func TestRunMainHeartbeatReleasesWaitingBashAndReplays(t *testing.T) {
 		}
 	})
 	started, released, finished := false, false, false
+	waitingCall := llm.ToolCall{
+		CallID: "waiting-call", Name: "Bash", Arguments: `{"command":"read value < release; printf '%s' \"$value\""}`,
+	}
 	client := &fakeClient{respond: func(_ context.Context, request llm.Request) (llm.Response, error) {
 		if !started {
 			started = true
+			return llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: waitingCall}}}, nil
 		}
 		for _, item := range request.Input {
 			if item.Type != llm.ItemToolResult {
@@ -105,7 +110,16 @@ func TestRunMainHeartbeatReleasesWaitingBashAndReplays(t *testing.T) {
 				t.Fatal(err)
 			}
 			if control.Mode == inbox.Heartbeat {
+				encoded, ok := strings.CutPrefix(control.Reason, "Heartbeat: waited 0.01 seconds for tool calls.\nRunning: ")
+				if !ok {
 					t.Fatalf("heartbeat reason = %q", control.Reason)
+				}
+				var calls []llm.ToolCall
+				if err := json.Unmarshal([]byte(encoded), &calls); err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(calls, []llm.ToolCall{waitingCall}) {
+					t.Fatalf("heartbeat tool calls = %#v, want %#v", calls, waitingCall)
 				}
 				heartbeats++
 			}
@@ -144,6 +158,7 @@ func heartbeatMessageCount(request llm.Request) int {
 	for _, item := range request.Input {
 		if item.Type == llm.ItemMessage {
 			message := item.Data.(llm.Message)
+			if message.Role == llm.RoleUser && strings.HasPrefix(message.Text, "Heartbeat: waited 0.01 seconds for tool calls.\nRunning: ") {
 				count++
 			}
 		}

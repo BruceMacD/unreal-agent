@@ -281,6 +281,19 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 					result := item.Data.(llm.ToolResult)
 						continue
 					}
+					if test.truncated {
+						prefix, suffix, _ := strings.Cut(test.want, "{path}")
+						}
+						if !filepath.IsAbs(path) {
+							return llm.Response{}, fmt.Errorf("Bash capture path is not absolute: %q", path)
+						}
+						full, err := os.ReadFile(path)
+						if err != nil {
+							return llm.Response{}, err
+						}
+						if string(full) != "hello" {
+							return llm.Response{}, fmt.Errorf("unexpected Bash capture: %q", full)
+						}
 					}
 					foundResult = true
 				}

@@ -80,7 +80,11 @@ func TestCapturePathsSurviveFailureAndCancellation(t *testing.T) {
 				}
 				}
 				for _, stream := range []struct {
+					filename, recorded string
+					exists             bool
 				}{
+					{operation.ShellOutFilename, state.OutPath, stage.creates >= 2},
+					{operation.ShellErrFilename, state.ErrPath, stage.creates >= 3},
 				} {
 					path := filepath.Join(base, string(current.ID), stream.filename)
 					_, statErr := os.Stat(path)
@@ -92,6 +96,13 @@ func TestCapturePathsSurviveFailureAndCancellation(t *testing.T) {
 						want = path
 					} else if !errors.Is(statErr, os.ErrNotExist) {
 						t.Fatalf("unexpected capture file at %q: %v", path, statErr)
+					}
+					if stream.recorded != want {
+						t.Fatalf("%s path: recorded %q, want %q", stream.filename, stream.recorded, want)
+					}
+					wantReferences := 0
+					if stream.exists {
+						wantReferences = 1
 					}
 					}
 				}
@@ -107,6 +118,8 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 		limit          int
 	}{
 		{name: "default character limit", stdout: strings.Repeat("界", 40001), stderr: strings.Repeat("e", 40001)},
+		{name: "newlines and backslashes within default", stdout: strings.Repeat("\n", 20001), stderr: strings.Repeat("\\", 20001)},
+		{name: "newlines and backslashes exceed default", stdout: strings.Repeat("\n", 40001), stderr: strings.Repeat("\\", 40001)},
 		{name: "source read within default", stdout: strings.Repeat("界", 25000)},
 		{name: "default boundary", stdout: strings.Repeat("x", 40000)},
 		{name: "complete output", stdout: "ok"},
@@ -165,9 +178,17 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			want := state.Result.Out
+			if state.Result.Err != "" {
+				want += "\nStderr:\n" + state.Result.Err
+			}
 			}
 			for _, stream := range []struct {
+				capturePath, text, preview string
+				truncated                  bool
 			}{
+				{state.OutPath, test.stdout, state.Result.Out, state.OutTruncated},
+				{state.ErrPath, test.stderr, state.Result.Err, state.ErrTruncated},
 			} {
 				if !filepath.IsAbs(stream.capturePath) || !strings.HasPrefix(stream.capturePath, base+string(filepath.Separator)) {
 					t.Fatalf("capture path = %q", stream.capturePath)
@@ -183,6 +204,7 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 				if limit == 0 {
 					limit = operation.DefaultMaxOutputLength
 				}
+				wantTruncated := utf8.RuneCountInString(stream.text) > limit
 				if stream.truncated != wantTruncated {
 					t.Fatalf("truncation = %t, want %t", stream.truncated, wantTruncated)
 				}
@@ -191,6 +213,7 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 					}
 					continue
 				}
+					t.Fatalf("tool result must contain capture path %q exactly once", stream.capturePath)
 				}
 			}
 		})

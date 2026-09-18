@@ -210,6 +210,7 @@ func TestRemoteJobPreparesOutputBeforePublishingUpdate(t *testing.T) {
 	if err := json.Unmarshal(step.Operation.State, &prepared); err != nil {
 		t.Fatal(err)
 	}
+	if prepared.TerminalResult != `"...6 bytes truncated...é"` || prepared.ResultBytes != 10 || !prepared.ResultTruncated {
 		t.Fatalf("prepared result = %#v", prepared)
 	}
 	failed, err := operation.FailRemoteJob(current, errors.New("éééé"))
@@ -258,6 +259,7 @@ func TestRemoteJobOutputRemainsTruncatedAfterRoundTrip(t *testing.T) {
 					if state.TerminalError != "é...2 bytes truncated...éé" || !state.ErrorTruncated || state.ErrorBytes != 8 {
 						t.Fatalf("error after round trip = %#v", state)
 					}
+				} else if state.TerminalResult != `"...6 bytes truncated...é"` || !state.ResultTruncated || state.ResultBytes != 10 {
 					t.Fatalf("result after round trip = %#v", state)
 				}
 			}

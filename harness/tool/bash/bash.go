@@ -45,17 +45,27 @@ func (translator *translator) TranslateResult(
 	status tool.CallStatus,
 	operations []operation.Operation,
 ) (llm.ToolResult, error) {
+	if status.Error != "" {
+		if len(operations) != 0 {
+			return llm.ToolResult{}, fmt.Errorf("bash tool call %q has both a validation error and operations", callID)
 		}
 	}
+	if len(operations) != 1 {
+		return llm.ToolResult{}, fmt.Errorf("bash tool call %q has %d operations, want 1", callID, len(operations))
+	}
 
+	output, err := translateOperationResult(callID, operations[0])
 	if err != nil {
+		return llm.ToolResult{}, err
 	}
 }
 
 func translateOperationResult(
 	callID string,
 	current operation.Operation,
+) (string, error) {
 	if current.Type != operation.TypeShell {
+		return "", fmt.Errorf(
 			"bash tool call %q operation %q has type %q, want %q",
 			callID,
 			current.ID,
@@ -66,11 +76,49 @@ func translateOperationResult(
 
 	state, err := operation.DecodeShellState(current)
 	if err != nil {
+		return "", fmt.Errorf("decode Bash operation %q state: %w", current.ID, err)
 	}
+	switch current.Status {
+	case operation.StatusReady, operation.StatusAwaiting, operation.StatusCanceling:
+		return "Command is still running.", nil
+	case operation.StatusCompleted:
+		if state.Result == nil {
+			return "", fmt.Errorf("bash tool call %q completed operation %q has no result", callID, current.ID)
+		}
+	case operation.StatusFailed, operation.StatusCanceled:
+		if state.TerminalError == "" {
+			state.TerminalError = "shell operation " + string(current.Status)
+		}
+	default:
+		return "", fmt.Errorf("bash tool call %q operation %q has invalid status %q", callID, current.ID, current.Status)
 	}
+
+	var parts []string
 	if state.Result != nil {
+		if state.Result.Out != "" {
+			parts = append(parts, state.Result.Out)
+		}
+		if state.Result.Err != "" {
+			parts = append(parts, "Stderr:\n"+state.Result.Err)
+		}
+		if state.Result.ExitCode != 0 {
+			parts = append(parts, fmt.Sprintf("Exit code: %d", state.Result.ExitCode))
+		}
+	} else {
+		if state.OutPath != "" {
+			parts = append(parts, "Stdout capture: "+state.OutPath)
+		}
+		if state.ErrPath != "" {
+			parts = append(parts, "Stderr capture: "+state.ErrPath)
 		}
 	}
+	if state.TerminalError != "" {
+		parts = append(parts, "Error: "+state.TerminalError)
+	}
+	if len(parts) == 0 {
+		return "(no output)", nil
+	}
+	return strings.Join(parts, "\n"), nil
 }
 
 func validateArguments(encoded string) (string, int, error) {

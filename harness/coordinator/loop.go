@@ -1,10 +1,12 @@
 package coordinator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 	"uuid"
 
@@ -263,8 +265,20 @@ func (current *coordinator) isWaitingForOnlyToolCalls() bool {
 }
 
 func (current *coordinator) postHeartbeat(ctx context.Context) error {
+	calls := make([]llm.ToolCall, 0, len(current.state.toolCalls))
+	for _, call := range current.state.toolCalls {
+		calls = append(calls, call.toolCall)
+	}
+	slices.SortFunc(calls, func(a, b llm.ToolCall) int {
+		return cmp.Compare(a.CallID, b.CallID)
+	})
+	runningCalls, err := json.Marshal(calls)
+	if err != nil {
+		return fmt.Errorf("encode heartbeat tool calls: %w", err)
+	}
 	payload, err := json.Marshal(inbox.ControlMessage{
 		Mode:   inbox.Heartbeat,
+		Reason: fmt.Sprintf("Heartbeat: waited %g seconds for tool calls.\nRunning: %s", current.dependencies.ToolHeartbeatInterval.Seconds(), runningCalls),
 	})
 	if err != nil {
 		return fmt.Errorf("encode heartbeat: %w", err)

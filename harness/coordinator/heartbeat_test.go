@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,9 @@ func TestCoordinatorHeartbeatsWhileWaitingForTools(t *testing.T) {
 		}
 		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
+		wantReason := "Heartbeat: waited 60 seconds for tool calls.\nRunning: " +
+		if reason := latestHeartbeatReason(t, run); reason != wantReason {
+			t.Fatalf("heartbeat reason = %q, want %q", reason, wantReason)
 		}
 		if run.requestCount() != 1 || countHeartbeatMessages(run.calls[0].request) != 1 {
 			t.Fatal("heartbeat did not produce one model request with a check-in message")
@@ -113,6 +117,10 @@ func TestCoordinatorHeartbeatYieldsToSteeringAndResults(t *testing.T) {
 		assertHeartbeatCount(t, run, 0)
 		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
+		wantReason := "Heartbeat: waited 60 seconds for tool calls.\nRunning: " +
+		if reason := latestHeartbeatReason(t, run); reason != wantReason {
+			t.Fatalf("heartbeat reason = %q, want only the remaining call: %q", reason, wantReason)
+		}
 	})
 }
 
@@ -366,6 +374,26 @@ func assertHeartbeatCount(t *testing.T, run *heartbeatTestRun, want int) {
 	if count != want {
 		t.Fatalf("heartbeats = %d, want %d", count, want)
 	}
+}
+
+func latestHeartbeatReason(t *testing.T, run *heartbeatTestRun) string {
+	t.Helper()
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	for _, input := range slices.Backward(run.recordedInputs) {
+		if input.Kind != inbox.InputControl {
+			continue
+		}
+		control, err := input.DecodeControlMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if control.Mode == inbox.Heartbeat {
+			return control.Reason
+		}
+	}
+	t.Fatal("no recorded heartbeat")
+	return ""
 }
 
 func heartbeatInput(t *testing.T, id inbox.ID) inbox.Input {

@@ -81,11 +81,39 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 					OutSize: 3,
 				},
 			},
+			want: "ok\n",
 		},
 		{
 			name:   "empty output",
 			status: operation.StatusCompleted,
 			state:  operation.ShellState{Result: &operation.ShellResult{}},
+			want:   "(no output)",
+		},
+		{
+			name:   "stdout preserves whitespace and quotes",
+			status: operation.StatusCompleted,
+			state: operation.ShellState{Result: &operation.ShellResult{
+				Out: "\n  \"quoted\" \\ output\t\n\n",
+			}},
+			want: "\n  \"quoted\" \\ output\t\n\n",
+		},
+		{
+			name:   "successful stderr",
+			status: operation.StatusCompleted,
+			state:  operation.ShellState{Result: &operation.ShellResult{Err: "warning\n"}},
+			want:   "Stderr:\nwarning\n",
+		},
+		{
+			name:   "both streams",
+			status: operation.StatusCompleted,
+			state:  operation.ShellState{Result: &operation.ShellResult{Out: "out\n", Err: "err\n"}},
+			want:   "out\n\nStderr:\nerr\n",
+		},
+		{
+			name:   "nonzero exit without output",
+			status: operation.StatusCompleted,
+			state:  operation.ShellState{Result: &operation.ShellResult{ExitCode: 1}},
+			want:   "Exit code: 1",
 		},
 		{
 			name:   "nonzero exit with stderr",
@@ -93,42 +121,78 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 			state: operation.ShellState{Result: &operation.ShellResult{
 				Err: "command failed\n", ErrSize: 15, ExitCode: 7,
 			}},
+			want: "Stderr:\ncommand failed\n\nExit code: 7",
 		},
 		{
 			name:   "truncated stdout",
 			status: operation.StatusCompleted,
+			state: operation.ShellState{OutTruncated: true, OutPath: "/captures/out", Result: &operation.ShellResult{
+				Out: "head...92 bytes truncated; complete output in /captures/out...tail", OutSize: 100,
 			}},
+			want: "head...92 bytes truncated; complete output in /captures/out...tail",
 		},
 		{
 			name:   "truncated stderr",
 			status: operation.StatusCompleted,
+			state: operation.ShellState{ErrTruncated: true, ErrPath: "/captures/err", Result: &operation.ShellResult{
 				Out: "output", OutSize: 6,
+				Err: "head...92 bytes truncated; complete output in /captures/err...tail", ErrSize: 100, ExitCode: 7,
 			}},
+			want: "output\nStderr:\nhead...92 bytes truncated; complete output in /captures/err...tail\nExit code: 7",
 		},
 		{
 			name:   "ready",
 			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true},
 			status: operation.StatusReady,
+			want:   "Command is still running.",
 		},
 		{
 			name:   "awaiting",
 			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true},
 			status: operation.StatusAwaiting,
+			want:   "Command is still running.",
 		},
 		{
 			name:   "canceling",
 			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true},
 			status: operation.StatusCanceling,
+			want:   "Command is still running.",
 		},
 		{
 			name:   "canceled",
 			status: operation.StatusCanceled,
 			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true, TerminalError: "canceled by user"},
+			want:   "Error: canceled by user",
 		},
 		{
 			name:   "failed",
 			status: operation.StatusFailed,
 			state:  operation.ShellState{OutTruncated: true, ErrTruncated: true, TerminalError: "process failed"},
+			want:   "Error: process failed",
+		},
+		{
+			name:   "failed without explanation",
+			status: operation.StatusFailed,
+			want:   "Error: shell operation failed",
+		},
+		{
+			name:   "canceled without explanation",
+			status: operation.StatusCanceled,
+			want:   "Error: shell operation canceled",
+		},
+		{
+			name:   "truncated error",
+			status: operation.StatusFailed,
+			state:  operation.ShellState{TerminalError: "err...100 bytes truncated...end", ErrorTruncated: true},
+			want:   "Error: err...100 bytes truncated...end",
+		},
+		{
+			name:   "failed with captures",
+			status: operation.StatusFailed,
+			state: operation.ShellState{
+				TerminalError: "read failed", OutPath: "/captures/out", ErrPath: "/captures/err",
+			},
+			want: "Stdout capture: /captures/out\nStderr capture: /captures/err\nError: read failed",
 		},
 	}
 	translator := bash.New(bash.Config{})
@@ -152,6 +216,7 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 				t.Fatalf("call ID = %q", result.CallID)
 			}
 			}
+			for _, internal := range []string{"secret command", "/secret/path", "operation-1"} {
 				}
 			}
 		})
@@ -173,10 +238,28 @@ func TestTranslatorTranslatesValidationErrorWithoutOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+		t.Fatalf("result = %#v", result)
 	}
 }
 
+func TestTranslatorRejectsInvalidOperationCounts(t *testing.T) {
 	translator := bash.New(bash.Config{})
+	for _, test := range []struct {
+		name   string
+		status tool.CallStatus
+		count  int
+		want   string
+	}{
+		{name: "missing operation", want: "has 0 operations, want 1"},
+		{name: "multiple operations", count: 2, want: "has 2 operations, want 1"},
+		{name: "validation error with operation", status: tool.CallStatus{Error: "invalid"}, count: 1, want: "both a validation error and operations"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := translator.TranslateResult("call-1", test.status, make([]operation.Operation, test.count))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -204,6 +287,14 @@ func TestTranslatorRejectsInvalidShellOperationResults(t *testing.T) {
 				State: []byte(`{`),
 			}},
 			want: "decode Bash operation",
+		},
+		{
+			name: "invalid status",
+			operations: []operation.Operation{{
+				ID: "operation-1", Type: operation.TypeShell, Version: operation.VersionShell, MaxOutputLength: operation.DefaultMaxOutputLength,
+				Status: "unknown", State: validState,
+			}},
+			want: "invalid status",
 		},
 		{
 			name: "completed without result",
