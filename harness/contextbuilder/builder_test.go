@@ -138,6 +138,7 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 		Type: llm.ItemToolCall,
 		Data: call,
 	}}})
+	current.AddToolResult("call-1", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "completed:operation-1"}}, false)
 	result, err := current.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +152,7 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 			llm.Item{Type: llm.ItemToolCall, Data: call},
 			llm.Item{
 				Type: llm.ItemToolResult,
+				Data: llm.ToolResult{CallID: "call-1", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "completed:operation-1"}}},
 			},
 		),
 	}}
@@ -160,6 +162,11 @@ func TestBuilderBuildsRequestFromAddedValues(t *testing.T) {
 }
 
 func TestBuilderPreservesToolResultPayload(t *testing.T) {
+	output := []llm.ToolResultOutput{
+		{Kind: llm.ToolResultText, Value: strings.Repeat("界", 4_001) + string([]byte{0xff})},
+		{Kind: llm.ToolResultImage, Value: "data:image/png;base64,aGVsbG8="},
+		{Kind: llm.ToolResultText, Value: "Dimensions: 2000x1500"},
+	}
 	current := NewBuilder()
 	current.AddToolResult("call-1", output, false)
 
@@ -168,6 +175,8 @@ func TestBuilderPreservesToolResultPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := result.Request.Input[1].Data.(llm.ToolResult)
+	if !reflect.DeepEqual(got.Output, output) {
+		t.Fatalf("output = %#v, want unchanged output", got.Output)
 	}
 	if len(result.Report.Changes) != 0 {
 		t.Fatalf("changes = %#v", result.Report.Changes)
@@ -176,11 +185,13 @@ func TestBuilderPreservesToolResultPayload(t *testing.T) {
 
 func TestBuilderAppendsValidationErrorToolResult(t *testing.T) {
 	current := NewBuilder()
+	current.AddToolResult("call-1", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "error:invalid arguments"}}, false)
 
 	result, err := current.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := llm.ToolResult{CallID: "call-1", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "error:invalid arguments"}}}
 	if got := result.Request.Input[1].Data.(llm.ToolResult); !reflect.DeepEqual(got, want) {
 		t.Fatalf("result = %#v, want %#v", got, want)
 	}
@@ -196,7 +207,11 @@ func TestBuilderRemovesOnlyStagedRunningResultsForUpdatedCall(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			current := NewBuilder()
+			current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
 			current.Commit()
+			current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
+			current.AddToolResult("B", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
+			current.AddToolResult("C", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done C"}}, false)
 			if err := current.AddExternalInput(inbox.Input{ID: "input", Kind: inbox.InputExternal, Payload: []byte(`"continue"`)}); err != nil {
 				t.Fatal(err)
 			}
@@ -205,12 +220,17 @@ func TestBuilderRemovesOnlyStagedRunningResultsForUpdatedCall(t *testing.T) {
 				t.Fatal(err)
 			}
 			original := append([]llm.Item(nil), before.Request.Input...)
+			current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}, running)
 			result, err := current.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := withPreamble(
+				llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "A", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ToolCallRunningPayload}}}},
+				llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "B", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ToolCallRunningPayload}}}},
+				llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "C", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done C"}}}},
 				llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "continue"}},
+				llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "A", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: output}}}},
 			)
 			if !reflect.DeepEqual(result.Request.Input, want) {
 				t.Fatalf("input = %#v, want %#v", result.Request.Input, want)

@@ -51,6 +51,7 @@ func TestRequestBodyReplaysRejectedToolCallFromHistory(t *testing.T) {
 	builder.AddToolResult(result.CallID, result.Output, false)
 	builder.Commit()
 	builder.AddModelResponse(llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: validCall}}})
+	builder.AddToolResult(validCall.CallID, []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "found"}}, false)
 	built, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,16 @@ func TestRequestBodyReplaysRejectedToolCallFromHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	type wireContent struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
 	type wireItem struct {
+		Type      string        `json:"type"`
+		CallID    string        `json:"call_id"`
+		Name      string        `json:"name"`
+		Arguments string        `json:"arguments"`
+		Output    []wireContent `json:"output"`
 	}
 	var wire struct {
 		Input []wireItem `json:"input"`
@@ -79,7 +89,9 @@ func TestRequestBodyReplaysRejectedToolCallFromHistory(t *testing.T) {
 	}
 	want := []wireItem{
 		{Type: "function_call", CallID: call.CallID, Name: call.Name, Arguments: wire.Input[1].Arguments},
+		{Type: "function_call_output", CallID: call.CallID, Output: []wireContent{{Type: "input_text", Text: result.Output[0].Value}}},
 		{Type: "function_call", CallID: validCall.CallID, Name: validCall.Name, Arguments: validCall.Arguments},
+		{Type: "function_call_output", CallID: validCall.CallID, Output: []wireContent{{Type: "input_text", Text: "found"}}},
 	}
 	if !reflect.DeepEqual(wire.Input[1:], want) {
 		t.Fatalf("replayed calls and results = %+v, want %+v", wire.Input[1:], want)

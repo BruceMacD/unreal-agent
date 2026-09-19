@@ -52,8 +52,11 @@ func TestRunMainHeartbeatReleasesWaitingBashAndReplays(t *testing.T) {
 				continue
 			}
 			result := item.Data.(llm.ToolResult)
+			if result.CallID != "waiting-call" || result.Output[0].Value == contextbuilder.ToolCallRunningPayload {
 				continue
 			}
+			if result.Output[0].Value != "released" {
+				return llm.Response{}, fmt.Errorf("unexpected Bash result: %s", result.Output[0].Value)
 			}
 			finished = true
 			return llm.Response{}, nil

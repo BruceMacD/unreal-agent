@@ -36,6 +36,8 @@ func TestSubmittedPrefixAndLateResultOrderOnWire(t *testing.T) {
 				{Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "A", Name: "test", Arguments: `{}`}},
 				{Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "B", Name: "test", Arguments: `{}`}},
 			}})
+			builder.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
+			builder.AddToolResult("B", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done B"}}, false)
 			before, err := builder.Build()
 			if err != nil {
 				t.Fatal(err)
@@ -45,6 +47,7 @@ func TestSubmittedPrefixAndLateResultOrderOnWire(t *testing.T) {
 				t.Fatal(err)
 			}
 			builder.Commit()
+			builder.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}, false)
 			response, err := decodeResponse([]byte(`{"id":"response","object":"response","status":"completed","output":` + test.output + `}`))
 			if err != nil {
 				t.Fatal(err)
@@ -74,6 +77,7 @@ func TestSubmittedPrefixAndLateResultOrderOnWire(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.want), &wantResponse); err != nil {
 				t.Fatal(err)
 			}
+			wantTail := append(wantResponse, map[string]any{"type": "function_call_output", "call_id": "A", "output": []any{map[string]any{"type": "input_text", "text": "done A"}}})
 			tail := make([]map[string]any, len(next.Input)-len(sent.Input))
 			for i, item := range next.Input[len(sent.Input):] {
 				if err := json.Unmarshal(item, &tail[i]); err != nil {

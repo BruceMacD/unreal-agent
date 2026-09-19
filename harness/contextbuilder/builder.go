@@ -93,15 +93,19 @@ func (current *builder) AddTool(tool llm.Tool) {
 
 func (current *builder) AddToolResult(
 	callID string,
+	payload []llm.ToolResultOutput,
 	running bool,
 ) {
+	runningOutput := []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ToolCallRunningPayload}}
 	if running {
+		payload = runningOutput
 	}
 	current.stagedSuffix = slices.DeleteFunc(current.stagedSuffix, func(item llm.Item) bool {
 		if item.Type != llm.ItemToolResult {
 			return false
 		}
 		result := item.Data.(llm.ToolResult)
+		return result.CallID == callID && slices.Equal(result.Output, runningOutput)
 	})
 	current.stagedSuffix = append(current.stagedSuffix, llm.Item{
 		Type: llm.ItemToolResult,

@@ -24,12 +24,16 @@ func TestBuilderPlacesResponseBeforeUnsubmittedInputs(t *testing.T) {
 				{Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "A", Name: "test", Arguments: `{}`}},
 				{Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "B", Name: "test", Arguments: `{}`}},
 			}})
+			current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
+			current.AddToolResult("B", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done B"}}, false)
 			sent, err := current.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
 			original := append([]llm.Item(nil), sent.Request.Input...)
 			current.Commit()
+			current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
+			current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}, false)
 			if err := current.AddExternalInput(inbox.Input{ID: "second", Kind: inbox.InputExternal, Payload: []byte(`"continue"`)}); err != nil {
 				t.Fatal(err)
 			}
@@ -40,6 +44,7 @@ func TestBuilderPlacesResponseBeforeUnsubmittedInputs(t *testing.T) {
 				t.Fatal(err)
 			}
 			suffix := []llm.Item{
+				{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "A", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}}},
 				{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "continue"}},
 				{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: "heartbeat"}},
 				{Type: llm.ItemReasoning, Data: llm.Reasoning{Summary: []string{"added reasoning"}}},
@@ -70,12 +75,14 @@ func TestBuilderPlacesResponseBeforeUnsubmittedInputs(t *testing.T) {
 			}
 			current.Commit()
 			current.Commit()
+			current.AddToolResult("C", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done C"}}, false)
 			nextOutput := llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleAssistant, Text: "next response"}}
 			current.AddModelResponse(llm.Response{Output: []llm.Item{nextOutput}})
 			next, err := current.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
+			want = append(want, nextOutput, llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "C", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done C"}}}})
 			if !reflect.DeepEqual(next.Request.Input, want) {
 				t.Fatalf("next submission order = %#v, want %#v", next.Request.Input, want)
 			}
@@ -93,11 +100,14 @@ func TestBuilderPlacesResponseBeforeUnsubmittedInputs(t *testing.T) {
 
 func TestBuilderSubmitsAlreadyCompletedResultsWithoutDelay(t *testing.T) {
 	current := NewBuilder()
+	current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ""}}, true)
+	current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}, false)
 	before, err := current.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := withPreamble(
+		llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "A", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}}},
 	)
 	if !reflect.DeepEqual(before.Request.Input, want) {
 		t.Fatalf("completion not included before submission: %#v", before.Request.Input)
@@ -122,6 +132,7 @@ func TestBuilderUpdatesSystemPromptWithoutChangingConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	current.Commit()
+	current.AddToolResult("A", []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done A"}}, false)
 	before, err := current.Build()
 	if err != nil {
 		t.Fatal(err)

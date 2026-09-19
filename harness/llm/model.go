@@ -37,8 +37,21 @@ type ToolCall struct {
 	Arguments string
 }
 
+type ToolResultKind string
+
+const (
+	ToolResultText  ToolResultKind = "text"
+	ToolResultImage ToolResultKind = "image"
+)
+
+type ToolResultOutput struct {
+	Kind  ToolResultKind
+	Value string
+}
+
 type ToolResult struct {
 	CallID string
+	Output []ToolResultOutput
 }
 
 // Raw is the provider's verbatim reasoning item. A provider may attach state to

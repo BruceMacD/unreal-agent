@@ -215,8 +215,12 @@ func TestTranslatorTranslatesShellOperationResults(t *testing.T) {
 			if result.CallID != "call-1" {
 				t.Fatalf("call ID = %q", result.CallID)
 			}
+			if result.Output[0].Value != test.want {
+				t.Fatalf("result = %s, want %s", result.Output[0].Value, test.want)
 			}
 			for _, internal := range []string{"secret command", "/secret/path", "operation-1"} {
+				if strings.Contains(result.Output[0].Value, internal) {
+					t.Fatalf("result exposes internal value %q: %s", internal, result.Output[0].Value)
 				}
 			}
 		})
@@ -238,6 +242,7 @@ func TestTranslatorTranslatesValidationErrorWithoutOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.CallID != "call-1" || result.Output[0].Value != "Error: "+status.Error {
 		t.Fatalf("result = %#v", result)
 	}
 }

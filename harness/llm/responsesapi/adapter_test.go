@@ -442,6 +442,7 @@ func detailedRequest() llm.Request {
 			},
 			{
 				Type: llm.ItemToolResult,
+				Data: llm.ToolResult{CallID: "call-1", Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "sunny"}}},
 			},
 		},
 		Tools: []llm.Tool{tool},
@@ -478,6 +479,7 @@ func assertRequestBody(t *testing.T, got map[string]any) {
 			{"content":[{"annotations":[],"logprobs":[],"text":"Checking.","type":"output_text"}],"id":"previous-message","phase":"commentary","role":"assistant","status":"completed","type":"message"},
 			{"id":"previous-reasoning","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"Checked the request."}],"content":[{"type":"reasoning_text","text":"verbatim"}],"encrypted_content":"previous-opaque"},
 			{"arguments":"{\"city\":\"London\"}","call_id":"call-1","name":"weather","id":"previous-tool-call","type":"function_call"},
+			{"call_id":"call-1","output":[{"type":"input_text","text":"sunny"}],"type":"function_call_output"}
 		],
 		"model":"gpt-test",
 		"tools":[{

@@ -279,11 +279,15 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 						continue
 					}
 					result := item.Data.(llm.ToolResult)
+					if result.CallID != "call-1" || result.Output[0].Value == contextbuilder.ToolCallRunningPayload {
 						continue
 					}
 					if test.truncated {
 						prefix, suffix, _ := strings.Cut(test.want, "{path}")
+						if !strings.HasPrefix(result.Output[0].Value, prefix) || !strings.HasSuffix(result.Output[0].Value, suffix) {
+							return llm.Response{}, fmt.Errorf("unexpected truncated Bash output: %s", result.Output[0].Value)
 						}
+						path := strings.TrimSuffix(strings.TrimPrefix(result.Output[0].Value, prefix), suffix)
 						if !filepath.IsAbs(path) {
 							return llm.Response{}, fmt.Errorf("Bash capture path is not absolute: %q", path)
 						}
@@ -294,6 +298,8 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 						if string(full) != "hello" {
 							return llm.Response{}, fmt.Errorf("unexpected Bash capture: %q", full)
 						}
+					} else if result.Output[0].Value != test.want {
+						return llm.Response{}, fmt.Errorf("unexpected Bash output: %s", result.Output[0].Value)
 					}
 					foundResult = true
 				}

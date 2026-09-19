@@ -22,6 +22,8 @@ class Model(BaseHTTPRequestHandler):
         outputs = {
             item["call_id"]: item["output"]
             for item in request["input"]
+            if item.get("type") == "function_call_output"
+            and item["output"] != [{"type": "input_text", "text": RUNNING}]
         }
         calls = {
             item["call_id"]

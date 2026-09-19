@@ -207,7 +207,29 @@ func requestItem(source llm.Item) (openaiapi.Item, error) {
 		if !ok {
 			return item, fmt.Errorf("tool_result item data must be llm.ToolResult, got %T", source.Data)
 		}
+		contents := make(openaiapi.FunctionCallOutputItemParamOutput1, len(output.Output))
+		for i, part := range output.Output {
+			var content any
+			switch part.Kind {
+			case llm.ToolResultText:
+				content = openaiapi.InputTextContentParam{
+					Text: part.Value,
+					Type: openaiapi.InputTextContentParamTypeInputText,
+				}
+			case llm.ToolResultImage:
+				content = openaiapi.InputImageContentParamAutoParam{
+					ImageUrl: &part.Value,
+					Type:     openaiapi.InputImageContentParamAutoParamTypeInputImage,
+				}
+			default:
+				return item, fmt.Errorf("unsupported tool result kind %q", part.Kind)
+			}
+			if err := setUnion(&contents[i], content); err != nil {
+				return item, err
+			}
+		}
 		var value openaiapi.FunctionCallOutputItemParam_Output
+		if err := setUnion(&value, contents); err != nil {
 			return item, err
 		}
 		converted := openaiapi.FunctionCallOutputItemParam{

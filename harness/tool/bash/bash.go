@@ -49,6 +49,7 @@ func (translator *translator) TranslateResult(
 		if len(operations) != 0 {
 			return llm.ToolResult{}, fmt.Errorf("bash tool call %q has both a validation error and operations", callID)
 		}
+		return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "Error: " + status.Error}}}, nil
 	}
 	if len(operations) != 1 {
 		return llm.ToolResult{}, fmt.Errorf("bash tool call %q has %d operations, want 1", callID, len(operations))
@@ -58,6 +59,7 @@ func (translator *translator) TranslateResult(
 	if err != nil {
 		return llm.ToolResult{}, err
 	}
+	return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: output}}}, nil
 }
 
 func translateOperationResult(

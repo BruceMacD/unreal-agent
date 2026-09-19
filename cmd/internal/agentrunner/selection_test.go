@@ -134,6 +134,7 @@ func TestRunContinuesAfterUnavailableToolCall(t *testing.T) {
 			for _, item := range corrective.Input {
 				if item.Type == llm.ItemToolResult {
 					result := item.Data.(llm.ToolResult)
+					if result.CallID == "unavailable-call" && result.Output[0].Value == wantError {
 						found = true
 					}
 				}

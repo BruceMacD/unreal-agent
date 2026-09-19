@@ -78,6 +78,8 @@ func TestCapturePathsSurviveFailureAndCancellation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if !strings.HasSuffix(result.Output[0].Value, "Error: "+state.TerminalError) {
+					t.Fatalf("unexpected tool result: %s", result.Output[0].Value)
 				}
 				for _, stream := range []struct {
 					filename, recorded string
@@ -104,6 +106,8 @@ func TestCapturePathsSurviveFailureAndCancellation(t *testing.T) {
 					if stream.exists {
 						wantReferences = 1
 					}
+					if strings.Count(result.Output[0].Value, path) != wantReferences {
+						t.Fatalf("expected %d references to %q in %q", wantReferences, path, result.Output[0].Value)
 					}
 				}
 			})
@@ -182,6 +186,8 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 			if state.Result.Err != "" {
 				want += "\nStderr:\n" + state.Result.Err
 			}
+			if result.Output[0].Value != want {
+				t.Fatalf("translator changed prepared output: %q, want %q", result.Output[0].Value, want)
 			}
 			for _, stream := range []struct {
 				capturePath, text, preview string
@@ -209,10 +215,12 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 					t.Fatalf("truncation = %t, want %t", stream.truncated, wantTruncated)
 				}
 				if !wantTruncated {
+					if strings.Contains(result.Output[0].Value, stream.capturePath) || stream.preview != stream.text {
 						t.Fatalf("complete output = %#v", stream)
 					}
 					continue
 				}
+				if strings.Count(result.Output[0].Value, stream.capturePath) != 1 {
 					t.Fatalf("tool result must contain capture path %q exactly once", stream.capturePath)
 				}
 			}

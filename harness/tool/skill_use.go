@@ -54,6 +54,7 @@ func (translator *skillUseTranslator) TranslateResult(
 	operations []operation.Operation,
 ) (llm.ToolResult, error) {
 	if status.Error != "" {
+		return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: status.Error}}}, nil
 	}
 	if len(operations) != 1 {
 		return llm.ToolResult{}, fmt.Errorf(
@@ -71,8 +72,10 @@ func (translator *skillUseTranslator) TranslateResult(
 	case operation.StatusCompleted:
 		return llm.ToolResult{
 			CallID: callID,
+			Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: strings.ToValidUTF8(string(state.Content), "\uFFFD")}},
 		}, nil
 	case operation.StatusReady, operation.StatusAwaiting, operation.StatusCanceling:
+		return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "Skill is loading."}}}, nil
 	case operation.StatusCanceled, operation.StatusFailed:
 		if state.TerminalError == "" {
 			return llm.ToolResult{}, fmt.Errorf(
@@ -81,6 +84,7 @@ func (translator *skillUseTranslator) TranslateResult(
 				current.ID,
 			)
 		}
+		return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: state.TerminalError}}}, nil
 	default:
 		return llm.ToolResult{}, fmt.Errorf(
 			"skill-use call %q operation %q has unsupported status %q",

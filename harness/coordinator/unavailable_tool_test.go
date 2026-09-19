@@ -128,6 +128,7 @@ func TestCoordinatorRestoresUnavailableToolCall(t *testing.T) {
 			}
 			want := withPreamble(t,
 				llm.Item{Type: llm.ItemToolCall, Data: call},
+				llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: call.CallID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: wantError}}}},
 			)
 			if !reflect.DeepEqual(built.Request.Input, want) {
 				t.Fatalf("restored input = %#v, want %#v", built.Request.Input, want)

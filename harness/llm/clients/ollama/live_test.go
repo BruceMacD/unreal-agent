@@ -43,6 +43,7 @@ func TestLiveToolRoundTrip(t *testing.T) {
 				t.Fatalf("unexpected call: %+v", call)
 			}
 			calls++
+			request.Input = append(request.Input, llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: call.CallID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: secret}}}})
 		}
 	}
 	if calls != 1 {

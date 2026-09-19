@@ -272,6 +272,10 @@ func assertCoordinatorFaultTrace(t *testing.T, events []coordinatorFaultEvent, r
 					Input []struct {
 						Type   string `json:"type"`
 						CallID string `json:"call_id"`
+						Output []struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+						} `json:"output"`
 					} `json:"input"`
 				}
 				if err := json.Unmarshal(event.value.([]byte), &request); err != nil {
@@ -283,6 +287,10 @@ func assertCoordinatorFaultTrace(t *testing.T, events []coordinatorFaultEvent, r
 						if _, exists := delivered[item.CallID]; exists {
 							t.Fatal("tool result delivered more than once")
 						}
+						if len(item.Output) != 1 || item.Output[0].Type != "input_text" {
+							t.Fatalf("unexpected tool output: %#v", item.Output)
+						}
+						delivered[item.CallID] = item.Output[0].Text
 					}
 				}
 				if !reflect.DeepEqual(delivered, results) {

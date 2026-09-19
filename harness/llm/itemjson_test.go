@@ -17,6 +17,16 @@ func TestItemJSONRoundTrip(t *testing.T) {
 			CallID: "call-1", Name: "test", Arguments: `{}`,
 		}},
 		{ProviderID: "result-1", Type: ItemToolResult, Data: ToolResult{
+			CallID: "call-1", Output: []ToolResultOutput{{Kind: ToolResultText, Value: "done"}},
+		}},
+		{ProviderID: "result-image", Type: ItemToolResult, Data: ToolResult{
+			CallID: "call-image", Output: []ToolResultOutput{{Kind: ToolResultImage, Value: "image-data"}},
+		}},
+		{ProviderID: "result-mixed", Type: ItemToolResult, Data: ToolResult{
+			CallID: "call-mixed", Output: []ToolResultOutput{
+				{Kind: ToolResultText, Value: "Dimensions: 2000x1500"},
+				{Kind: ToolResultImage, Value: "data:image/png;base64,aGVsbG8="},
+			},
 		}},
 		{ProviderID: "reasoning-1", Type: ItemReasoning, Data: Reasoning{
 			Summary: []string{"inspect"}, Raw: jsontext.Value(`{"encrypted":"opaque"}`),
@@ -70,6 +80,11 @@ func TestItemJSONRejectsInvalidTagAndData(t *testing.T) {
 		`{"Type":"message","Data":[]}`,
 		`{"Type":"tool_call","Data":[]}`,
 		`{"Type":"tool_result","Data":[]}`,
+		`{"Type":"tool_result","Data":{"Output":"done"}}`,
+		`{"Type":"tool_result","Data":{"Output":42}}`,
+		`{"Type":"tool_result","Data":{"Output":{}}}`,
+		`{"Type":"tool_result","Data":{"Output":["done"]}}`,
+		`{"Type":"tool_result","Data":{"Output":[{"Value":42}]}}`,
 		`{"Type":"reasoning","Data":[]}`,
 		`{"Type":"message","Data":null}`,
 		`{"Type":"tool_call","Data":null}`,

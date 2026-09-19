@@ -693,6 +693,7 @@ func (current *coordinator) addToolResultToLocalState(
 	translator, exists := current.dependencies.Tools.Resolve(call.toolCall.Name)
 	if !exists {
 		if !toolCallRequiresTranslator(status) {
+			current.dependencies.ContextBuilder.AddToolResult(status.CallID, []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: status.Status.Error}}, false)
 			current.finishToolCall(status.TurnID, status.CallID)
 		}
 		return nil

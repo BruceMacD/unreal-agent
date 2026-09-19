@@ -3,6 +3,7 @@ package responsesapi
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,6 +93,75 @@ func TestRequestBodyReportsToolArgumentEncodingError(t *testing.T) {
 	}
 }
 
+func TestRequestBodyRejectsInvalidUTF8ToolResult(t *testing.T) {
+	body, err := requestBody(llm.Request{Input: []llm.Item{{
+		Type: llm.ItemToolResult,
+		Data: llm.ToolResult{
+			CallID: "call-1",
+			Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "bad\xffbyte"}},
+		},
+	}}}, "", nil)
+	if err == nil || !strings.HasPrefix(err.Error(), "input item 0: ") ||
+		!strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("error = %v, want an invalid UTF-8 error with input item context", err)
+	}
+	var syntaxError *jsontext.SyntacticError
+	if !errors.As(err, &syntaxError) || syntaxError.JSONPointer != "/text" {
+		t.Fatalf("error = %v, want a JSON encoding error at /text", err)
+	}
+	if body != nil {
+		t.Fatalf("body = %q, want no request body for invalid UTF-8", body)
+	}
+}
+
+func TestRequestBodyEncodesToolResultOutputs(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output []llm.ToolResultOutput
+		want   string
+	}{
+		{name: "text", output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "done"}}, want: `[{"type":"input_text","text":"done"}]`},
+		{name: "empty text", output: []llm.ToolResultOutput{{Kind: llm.ToolResultText}}, want: `[{"type":"input_text","text":""}]`},
+		{name: "no outputs", want: `[]`},
+		{name: "image URL", output: []llm.ToolResultOutput{{Kind: llm.ToolResultImage, Value: "https://example.com/image.png"}}, want: `[{"type":"input_image","image_url":"https://example.com/image.png"}]`},
+		{name: "image data URL", output: []llm.ToolResultOutput{{Kind: llm.ToolResultImage, Value: "data:image/png;base64,aGVsbG8="}}, want: `[{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]`},
+		{
+			name: "mixed content in order",
+			output: []llm.ToolResultOutput{
+				{Kind: llm.ToolResultText, Value: "Original dimensions: 4000x3000"},
+				{Kind: llm.ToolResultImage, Value: "data:image/png;base64,Zmlyc3Q="},
+				{Kind: llm.ToolResultText, Value: "Resized dimensions: 2000x1500"},
+				{Kind: llm.ToolResultImage, Value: "https://example.com/second.png"},
+			},
+			want: `[{"type":"input_text","text":"Original dimensions: 4000x3000"},{"type":"input_image","image_url":"data:image/png;base64,Zmlyc3Q="},{"type":"input_text","text":"Resized dimensions: 2000x1500"},{"type":"input_image","image_url":"https://example.com/second.png"}]`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := requestBody(llm.Request{
+				Model: llm.Model{ID: "gpt-test"},
+				Input: []llm.Item{{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: "call-1", Output: test.output}}},
+			}, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request struct {
+				Input []map[string]any `json:"input"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				t.Fatal(err)
+			}
+			var output []any
+			if err := json.Unmarshal([]byte(test.want), &output); err != nil {
+				t.Fatal(err)
+			}
+			want := []map[string]any{{"type": "function_call_output", "call_id": "call-1", "output": output}}
+			if !reflect.DeepEqual(request.Input, want) {
+				t.Fatalf("input = %#v, want %#v", request.Input, want)
+			}
+		})
+	}
+}
+
 func TestRequestBodyRejectsInvalidItemPayloads(t *testing.T) {
 	tests := []struct {
 		name string
@@ -112,6 +182,16 @@ func TestRequestBodyRejectsInvalidItemPayloads(t *testing.T) {
 			name: "tool result",
 			item: llm.Item{Type: llm.ItemToolResult},
 			want: "input item 0: tool_result item data must be llm.ToolResult, got <nil>",
+		},
+		{
+			name: "unset tool result kind",
+			item: llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{Output: []llm.ToolResultOutput{{Value: "done"}}}},
+			want: `input item 0: unsupported tool result kind ""`,
+		},
+		{
+			name: "unsupported tool result kind",
+			item: llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{Output: []llm.ToolResultOutput{{Kind: "unknown"}}}},
+			want: `input item 0: unsupported tool result kind "unknown"`,
 		},
 		{
 			name: "reasoning",

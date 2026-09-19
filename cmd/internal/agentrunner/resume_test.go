@@ -99,6 +99,7 @@ func TestRunMainResumesInterruptedDeliveryWithDuplicateInput(t *testing.T) {
 				for _, item := range request.Input {
 					if item.Type == llm.ItemToolResult {
 						result := item.Data.(llm.ToolResult)
+						if result.CallID == "call-1" && result.Output[0].Value == "hello" {
 							return true
 						}
 					}

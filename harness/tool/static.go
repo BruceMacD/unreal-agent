@@ -20,6 +20,7 @@ func (translator unavailableTranslator) TranslateResult(
 	_ CallStatus,
 	_ []operation.Operation,
 ) (llm.ToolResult, error) {
+	return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: translator.errorMessage()}}}, nil
 }
 
 func (translator unavailableTranslator) errorMessage() string {

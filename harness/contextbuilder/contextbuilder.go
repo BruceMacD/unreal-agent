@@ -38,6 +38,7 @@ type Builder interface {
 	AddModelResponse(llm.Response)
 	AddReasoning(llm.Reasoning)
 	AddTool(llm.Tool)
+	AddToolResult(string, []llm.ToolResultOutput, bool)
 	Commit()
 	Build() (Result, error)
 }

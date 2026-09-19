@@ -98,6 +98,7 @@ func TestToolsRejectInvalidOutputLengthsBeforeSubmission(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if !strings.Contains(result.Output[0].Value, "max_output_length") {
 					t.Fatalf("result = %#v", result)
 				}
 			})

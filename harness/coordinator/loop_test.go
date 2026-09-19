@@ -80,6 +80,7 @@ func TestCoordinatorRestoresSession(t *testing.T) {
 		response.Output[0],
 		response.Output[1],
 		llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{
+			CallID: call.CallID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "error:invalid arguments"}},
 		}},
 	)
 	if !reflect.DeepEqual(built.Request.Input, wantInput) {
@@ -322,6 +323,7 @@ func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
 	}
 	want := withPreamble(t,
 		llm.Item{Type: llm.ItemToolCall, Data: call},
+		llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: call.CallID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "completed"}}}},
 	)
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("replayed input = %#v, want %#v", built.Request.Input, want)
@@ -544,6 +546,7 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 	}
 	want := withPreamble(t, llm.Item{
 		Type: llm.ItemToolResult,
+		Data: llm.ToolResult{CallID: call.CallID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "error:invalid arguments"}}},
 	})
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
@@ -1899,6 +1902,7 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 	}
 	want := withPreamble(t,
 		llm.Item{Type: llm.ItemToolCall, Data: call},
+		llm.Item{Type: llm.ItemToolResult, Data: llm.ToolResult{CallID: call.CallID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "error:"}}}},
 	)
 	if !reflect.DeepEqual(built.Request.Input, want) {
 		t.Fatalf("built input = %#v, want %#v", built.Request.Input, want)
@@ -2433,6 +2437,7 @@ func (testTranslator) TranslateResult(
 	status tool.CallStatus,
 	_ []operation.Operation,
 ) (llm.ToolResult, error) {
+	return llm.ToolResult{Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "error:" + status.Error}}}, nil
 }
 
 type submittingTranslator struct {
@@ -2461,6 +2466,7 @@ func (*submittingTranslator) TranslateResult(
 	status tool.CallStatus,
 	_ []operation.Operation,
 ) (llm.ToolResult, error) {
+	return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: status.Error}}}, nil
 }
 
 type operationStatusTranslator struct{}
@@ -2478,6 +2484,7 @@ func (operationStatusTranslator) TranslateResult(
 	for _, value := range operations {
 		statuses = append(statuses, string(value.Status))
 	}
+	return llm.ToolResult{Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: strings.Join(statuses, ",")}}}, nil
 }
 
 type failingResultTranslator struct {
@@ -2512,6 +2519,7 @@ func (terminalResultTranslator) TranslateResult(
 			return llm.ToolResult{}, errors.New("terminal result failed")
 		}
 	}
+	return llm.ToolResult{Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "pending"}}}, nil
 }
 
 type itemRequest struct {
