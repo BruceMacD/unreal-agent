@@ -11,4 +11,5 @@ const (
 	PrimitiveDispatchIORead            PrimitiveDispatchType = "io.read"
 	PrimitiveDispatchRemoteRequest     PrimitiveDispatchType = "remote.request"
 	PrimitiveDispatchTimerSchedule     PrimitiveDispatchType = "timer.schedule"
+	PrimitiveDispatchCompute           PrimitiveDispatchType = "compute"
 )

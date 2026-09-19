@@ -391,6 +391,13 @@ func startLocalPrimitive(
 		}
 		primitives.StartProcess(ctx, request, events)
 
+	case primitives.PrimitiveDispatchCompute:
+		request, ok := dispatch.Data.(primitives.ComputeRequest)
+		if !ok {
+			return fmt.Errorf("compute dispatch data is %T, want primitives.ComputeRequest", dispatch.Data)
+		}
+		primitives.Compute(ctx, request, events)
+
 	default:
 		return fmt.Errorf("local operation manager does not support dispatch %q", dispatch.Type)
 	}
@@ -413,6 +420,8 @@ func localPrimitiveCompleted(eventType primitives.PrimitiveEventType) bool {
 		primitives.PrimitiveEventIOReadCompleted,
 		primitives.PrimitiveEventProcessExited,
 		primitives.PrimitiveEventFailed,
+		primitives.PrimitiveEventCanceled,
+		primitives.PrimitiveEventComputeCompleted:
 		return true
 	default:
 		return false

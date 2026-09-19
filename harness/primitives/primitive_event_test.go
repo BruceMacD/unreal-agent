@@ -30,6 +30,8 @@ func primitiveEventIsTerminal(eventType primitives.PrimitiveEventType) bool {
 		primitives.PrimitiveEventProcessInputClosed,
 		primitives.PrimitiveEventProcessSignaled,
 		primitives.PrimitiveEventRemoteCompleted,
+		primitives.PrimitiveEventTimerFired,
+		primitives.PrimitiveEventComputeCompleted:
 		return true
 	default:
 		return false
