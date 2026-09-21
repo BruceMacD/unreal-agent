@@ -49,6 +49,7 @@ type loopState struct {
 	currentTurnInputs int
 	callModel         bool
 	grace             <-chan time.Time
+	graceToolCalls    map[toolCallKey]struct{}
 }
 
 type toolCallState struct {
@@ -76,6 +77,9 @@ var _ Coordinator = (*coordinator)(nil)
 
 func newLoopState() loopState {
 	return loopState{
+		toolCalls:      make(map[toolCallKey]toolCallState),
+		operations:     make(map[operation.ID]operation.Operation),
+		graceToolCalls: make(map[toolCallKey]struct{}),
 	}
 }
 
@@ -144,6 +148,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			}
 
 		case <-current.state.grace:
+			current.clearToolGrace()
 
 		case received := <-modelResponses:
 			if current.cancelModel == nil || received.turnID != current.state.currentTurnID {
@@ -173,6 +178,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			current.clearToolGrace()
 			// heartbeat is cleared immediately at the top of the loop, because now we're waiting for the model response
 		}
 		if current.stop.request.Mode == inbox.StopWhenIdle && current.isIdle() {
@@ -200,6 +206,7 @@ func (current *coordinator) processEvents(ctx context.Context) (bool, error) {
 	if _, err := current.reconcileToolCalls(ctx); err != nil {
 		return false, err
 	}
+	return current.state.callModel || (current.pendingInputs() > 0 && current.cancelModel == nil && len(current.state.graceToolCalls) == 0), nil
 }
 
 func (current *coordinator) processInputs(ctx context.Context, inputs []inbox.Input) error {
@@ -238,9 +245,17 @@ func (current *coordinator) processModelResponse(ctx context.Context, modelRespo
 		}
 	}
 	if !current.state.callModel && len(statuses) > 0 {
+		for _, status := range statuses {
+			current.state.graceToolCalls[toolCallKey{turnID: status.TurnID, callID: status.CallID}] = struct{}{}
+		}
 		current.state.grace = time.After(toolCallRunGracePeriod)
 	}
 	return nil
+}
+
+func (current *coordinator) clearToolGrace() {
+	clear(current.state.graceToolCalls)
+	current.state.grace = nil
 }
 
 func (current *coordinator) handleStop() (bool, error) {
@@ -391,6 +406,7 @@ func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.In
 			current.acceptStop(request)
 		}
 	}
+	current.clearToolGrace()
 	return nil
 }
 
@@ -532,6 +548,7 @@ func (current *coordinator) addItemToLocalState(
 		// FIXME: Forks leave inherited calls without results and retain pending-input accounting.
 		clear(current.state.toolCalls)
 		clear(current.state.operations)
+		current.clearToolGrace()
 
 	case sessionstore.ItemInput:
 		input, ok := item.Data.(inbox.Input)
@@ -660,6 +677,12 @@ func (current *coordinator) finishToolCall(
 	turnID session.TurnID,
 	callID string,
 ) {
+	key := toolCallKey{turnID: turnID, callID: callID}
+	delete(current.state.toolCalls, key)
+	delete(current.state.graceToolCalls, key)
+	if len(current.state.graceToolCalls) == 0 {
+		current.clearToolGrace()
+	}
 	current.state.availableInputs++
 }
 

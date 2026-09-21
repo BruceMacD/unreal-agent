@@ -42,6 +42,49 @@ func TestCoordinatorToolGraceBatchesCompletionsUntilAllCallsFinish(t *testing.T)
 	}
 }
 
+func TestCoordinatorToolGraceWaitsOnlyForLatestTurn(t *testing.T) {
+	for _, endGrace := range []string{"steering", "expiry"} {
+		t.Run(endGrace, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				run := newToolGraceTestRun(t)
+				run.start(t)
+				run.input(t, externalEvent(t, 0, "input", "run three tools"))
+				run.respond(t, 0, toolGraceResponse("A", "B", "C"))
+				updateToolGraceCall(t, run, "A", operation.StatusCompleted)
+				if endGrace == "steering" {
+					run.input(t, externalEvent(t, 1, "steering", "run two more tools"))
+				} else {
+					synctest.Sleep(toolCallRunGracePeriod)
+				}
+				run.respond(t, 1, toolGraceResponse("D", "E"))
+				deadline := time.Now().Add(toolCallRunGracePeriod)
+				updateToolGraceCall(t, run, "B", operation.StatusCompleted)
+				if run.requestCount() != 2 {
+					t.Fatal("older completion ended the new turn's grace period")
+				}
+				updateToolGraceCall(t, run, "D", operation.StatusCompleted)
+				if run.requestCount() != 2 {
+					t.Fatal("partial completion ended the new turn's grace period")
+				}
+				updateToolGraceCall(t, run, "E", operation.StatusCompleted)
+				if run.requestCount() != 3 || !time.Now().Before(deadline) {
+					t.Fatal("older running call prevented the new turn's grace period from ending early")
+				}
+				for _, callID := range []string{"A", "B", "D", "E"} {
+					assertStopResult(t, run.calls[2].request, callID, string(operation.StatusCompleted))
+				}
+				assertStopResult(t, run.calls[2].request, "C", contextbuilder.ToolCallRunningPayload)
+				run.respond(t, 2, textResponse("Waiting for C."))
+				updateToolGraceCall(t, run, "C", operation.StatusCompleted)
+				if run.requestCount() != 4 {
+					t.Fatal("older completion was deferred after the new turn's grace period ended")
+				}
+				assertStopResult(t, run.calls[3].request, "C", string(operation.StatusCompleted))
+			})
+		})
+	}
+}
+
 func TestCoordinatorToolGraceDeadlineDoesNotResetOnCompletion(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		run := newToolGraceTestRun(t)
