@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
 )
 
 func main() {

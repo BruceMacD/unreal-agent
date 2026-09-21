@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 

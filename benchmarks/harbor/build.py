@@ -34,6 +34,7 @@ def build(revision: str, output: Path, arch: str, runner: str) -> None:
                 "-buildvcs=false",
                 "-o",
                 str(binary),
+                f"./cmd/{runner}",
             ],
             cwd=source,
             env={**os.environ, "GOOS": "linux", "GOARCH": arch, "CGO_ENABLED": "0"},
@@ -61,6 +62,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--runner",
         default="unreal-agent-runner",
+        help="runner command (default: unreal-agent-runner)",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
