@@ -85,6 +85,10 @@ func FuzzRunLogMatchesExecution(f *testing.F) {
 			logDirectory := filepath.Join(workspace, "logs")
 			for run := range 3 {
 				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+				client := &fakeClient{respond: func(ctx context.Context, request llm.Request) (llm.Response, error) {
+					if request.Model.ID != "journal-model" || request.Model.ReasoningEffort != llm.ReasoningEffortHigh {
+						return llm.Response{}, fmt.Errorf("unexpected request settings: %#v", request.Model)
+					}
 					if err := ctx.Err(); err != nil {
 						return llm.Response{}, err
 					}
@@ -193,6 +197,7 @@ func assertExecutionLog(t *testing.T, items []sessionstore.Item, returned []llm.
 	var turns []session.Turn
 	var previous session.TurnID
 	inputs := 0
+	stops, settings := 0, 0
 	inputIDs := make(map[inbox.ID]bool)
 	calls := make(map[string]session.TurnID)
 	statuses := make(map[string]sessionstore.ToolCallStatus)
@@ -216,6 +221,19 @@ func assertExecutionLog(t *testing.T, items []sessionstore.Item, returned []llm.
 				}
 			case inbox.InputControl:
 				control, err := value.DecodeControlMessage()
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch control.Mode {
+				case inbox.StopWhenIdle:
+					stops++
+				case inbox.UpdateSettings:
+					settings++
+					if control.Parameters != (inbox.Settings{ReasoningEffort: llm.ReasoningEffortHigh}) {
+						t.Fatalf("logged settings differ from the runner request: %#v", control.Parameters)
+					}
+				default:
+					t.Fatalf("unexpected control: %#v", control)
 				}
 			default:
 				t.Fatalf("unexpected input kind %q", value.Kind)
@@ -267,6 +285,8 @@ func assertExecutionLog(t *testing.T, items []sessionstore.Item, returned []llm.
 	if inputs != 1 {
 		t.Fatalf("logged external inputs = %d, want one despite retries", inputs)
 	}
+	if stops != runs || settings != runs {
+		t.Fatalf("logged stops = %d, settings = %d, runs = %d", stops, settings, runs)
 	}
 	if len(turns) != requests {
 		t.Fatalf("logged turns = %d, actual model requests = %d", len(turns), requests)

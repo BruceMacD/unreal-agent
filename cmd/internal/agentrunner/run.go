@@ -275,6 +275,20 @@ func Run(
 	if err != nil {
 		return fmt.Errorf("open inbox: %w", err)
 	}
+	settingsPayload, err := json.Marshal(inbox.ControlMessage{
+		Mode: inbox.UpdateSettings,
+		Parameters: inbox.Settings{
+			ReasoningEffort: reasoningEffort(parsed.ThinkingLevel),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("encode settings: %w", err)
+	}
+	if err := inputs.Submit(runContext, inbox.Input{
+		ID: inbox.ID(uuid.New().String()), Kind: inbox.InputControl, Payload: settingsPayload,
+	}); err != nil {
+		return fmt.Errorf("submit settings: %w", err)
+	}
 	for index, message := range messages {
 		payload, err := json.Marshal(message.Content)
 		if err != nil {

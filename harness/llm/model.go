@@ -92,6 +92,15 @@ const (
 	ReasoningEffortMax    ReasoningEffort = "max"
 )
 
+func (effort ReasoningEffort) Valid() bool {
+	switch effort {
+	case ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax:
+		return true
+	default:
+		return false
+	}
+}
+
 type Request struct {
 	Model Model
 	Input []Item

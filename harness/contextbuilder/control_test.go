@@ -1,6 +1,7 @@
 package contextbuilder
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -39,5 +40,32 @@ func TestBuilderControlMessages(t *testing.T) {
 				t.Fatalf("message = %#v", message)
 			}
 		})
+	}
+}
+
+func TestBuilderSettingsOnlyChangeEffortInSubsequentRequests(t *testing.T) {
+	limit := int64(123)
+	builder := NewBuilder()
+	builder.SetModel(llm.Model{ID: "model", MaxOutputTokens: &limit, ReasoningEffort: llm.ReasoningEffortHigh})
+	builder.AddTool(llm.Tool{Name: "tool"})
+	builder.AddReasoning(llm.Reasoning{Summary: []string{"thought"}})
+	original, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder.AddControlMessage(inbox.ControlMessage{
+		Mode: inbox.UpdateSettings, Parameters: inbox.Settings{ReasoningEffort: llm.ReasoningEffortLow},
+	})
+	built, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := original
+	want.Request.Model.ReasoningEffort = llm.ReasoningEffortLow
+	if !reflect.DeepEqual(built, want) {
+		t.Fatalf("settings changed other request content: got %#v, want %#v", built, want)
+	}
+	if original.Request.Model.ReasoningEffort != llm.ReasoningEffortHigh {
+		t.Fatal("settings mutated an already built request")
 	}
 }

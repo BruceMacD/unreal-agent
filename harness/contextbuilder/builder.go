@@ -65,6 +65,15 @@ func (current *builder) SetModel(model llm.Model) {
 }
 
 func (current *builder) AddControlMessage(request inbox.ControlMessage) {
+	switch request.Mode {
+	case inbox.UpdateSettings:
+		settings := request.Parameters.(inbox.Settings)
+		current.request.Model.ReasoningEffort = settings.ReasoningEffort
+	case inbox.Heartbeat:
+		current.stagedSuffix = append(current.stagedSuffix, llm.Item{
+			Type: llm.ItemMessage,
+			Data: llm.Message{Role: llm.RoleUser, Text: request.Reason},
+		})
 	}
 }
 

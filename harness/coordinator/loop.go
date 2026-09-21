@@ -403,6 +403,10 @@ func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.In
 		if err != nil {
 			return err
 		}
+		switch request.Mode {
+		case inbox.UpdateSettings:
+			return nil
+		case inbox.StopHard, inbox.StopWhenIdle:
 			current.acceptStop(request)
 		}
 	}

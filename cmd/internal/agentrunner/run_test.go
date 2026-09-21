@@ -108,7 +108,15 @@ description: Review code.
 	}
 	}
 	assertItemSequence(t, stdout.String(),
+		"input.control input.external input.external input.control turn model_response",
+		"input.control input.external input.external turn input.control model_response",
+		"input.control input.external input.external turn model_response input.control",
 	)
+	items := decodeLogItems(t, stdout.Bytes())
+	control, err := items[0].Data.(inbox.Input).DecodeControlMessage()
+	if err != nil || control.Mode != inbox.UpdateSettings || control.Parameters != (inbox.Settings{ReasoningEffort: llm.ReasoningEffortMedium}) {
+		t.Fatalf("initial settings = %#v, error = %v", control, err)
+	}
 	ids := inputIDs(t, stdout.String())
 	if len(ids) != 2 || ids[0] != "69621f8d-4f4d-49a5-8f7d-3b24fd855c01" {
 		t.Fatalf("input IDs = %#v", ids)
@@ -342,6 +350,11 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 				t.Fatal("persisted session items contain the process environment")
 			}
 			assertItemSequence(t, stdout.String(),
+				"input.control input.external input.control turn model_response tool_call_status tool_call_status turn model_response",
+				"input.control input.external turn input.control model_response tool_call_status tool_call_status turn model_response",
+				"input.control input.external turn model_response tool_call_status input.control tool_call_status turn model_response",
+				"input.control input.external turn model_response tool_call_status tool_call_status turn input.control model_response",
+				"input.control input.external turn model_response tool_call_status tool_call_status turn model_response input.control",
 			)
 		})
 	}

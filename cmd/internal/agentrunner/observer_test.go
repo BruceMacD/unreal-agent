@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
@@ -57,6 +58,10 @@ func TestSessionObserverStopsOnOutputFailure(t *testing.T) {
 }
 
 type failingItemWriter struct {
+	kind      sessionstore.ItemKind
+	inputKind inbox.InputKind
+	err       error
+	writes    int
 }
 
 func (output *failingItemWriter) Write(data []byte) (int, error) {
@@ -66,6 +71,9 @@ func (output *failingItemWriter) Write(data []byte) (int, error) {
 		return 0, err
 	}
 	if item.Kind == output.kind {
+		if output.inputKind != "" && item.Data.(inbox.Input).Kind != output.inputKind {
+			return len(data), nil
+		}
 		return 0, output.err
 	}
 	return len(data), nil
