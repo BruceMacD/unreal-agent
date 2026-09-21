@@ -16,6 +16,7 @@ Builds committed source into `bin/harbor/<short-commit>/` with a revision and
 checksum manifest. Defaults to Linux amd64. Existing bundles are not overwritten;
 set `BUNDLE` to a new directory to rebuild.
 
+The manifest records the selected runner along with the revision.
 
 ## Run
 

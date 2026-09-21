@@ -1,6 +1,7 @@
 .PHONY: sync check test build smoke
 
 REVISION ?= HEAD
+RUNNER ?= unreal-agent-runner
 ARCH ?= amd64
 BUNDLE ?= ../../bin/harbor/$(shell git rev-parse --short $(REVISION))
 

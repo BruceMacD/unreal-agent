@@ -19,11 +19,13 @@ def build(revision: str, output: Path, arch: str, runner: str) -> None:
     if output.exists():
         raise FileExistsError(f"Refusing to replace runner bundle: {output}")
     with ExitStack() as stack:
+        source = Path(stack.enter_context(TemporaryDirectory(prefix="harbor-build-")))
         archive = stack.enter_context(NamedTemporaryFile(suffix=".tar"))
         subprocess.run(["git", "archive", commit], cwd=repo, stdout=archive, check=True)
         archive.flush()
         with tarfile.open(archive.name) as tree:
             tree.extractall(source, filter="data")
+        binary = source / "unreal-agent-runner"
         subprocess.run(
             [
                 "go",
@@ -33,6 +35,7 @@ def build(revision: str, output: Path, arch: str, runner: str) -> None:
                 "-o",
                 str(binary),
             ],
+            cwd=source,
             env={**os.environ, "GOOS": "linux", "GOARCH": arch, "CGO_ENABLED": "0"},
             check=True,
         )
@@ -57,6 +60,7 @@ if __name__ == "__main__":
     parser.add_argument("--revision", default="HEAD")
     parser.add_argument(
         "--runner",
+        default="unreal-agent-runner",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
