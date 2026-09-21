@@ -36,6 +36,8 @@ func (translator *fixedTranslator) TranslateResult(
 }
 
 	translators := StaticTranslators{
+		Bash:      &fixedTranslator{},
+		ViewImage: &fixedTranslator{},
 	}
 	definitions := registry.StaticDefinitions()
 	if len(definitions) != len(wantNames) {
@@ -46,6 +48,7 @@ func (translator *fixedTranslator) TranslateResult(
 			t.Fatalf("static definition %d name = %q, want %q", index, definitions[index].Tool.Name, want)
 		}
 	}
+	for name, want := range map[string]Translator{BashName: translators.Bash, ViewImageName: translators.ViewImage} {
 		got, exists := registry.Resolve(name)
 		if !exists || got != want {
 			t.Fatalf("resolve %q = (%#v, %t), want (%#v, true)", name, got, exists, want)

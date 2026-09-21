@@ -38,11 +38,20 @@ type localRunningOperation struct {
 }
 
 func (current *localRunningOperation) initialize() error {
+	switch current.operation.Type {
+	case TypeShell:
 		shell, err := NewShell(current.operation)
 		if err != nil {
 			return err
 		}
 		current.handle = shell.Handle
+	case TypeViewImage:
+		view, err := NewViewImage(current.operation)
+		if err != nil {
+			return err
+		}
+		current.handle = view.Handle
+	default:
 		current.handle = func(event *primitives.PrimitiveEvent) (Step, error) {
 			return advanceLocalOperation(current.operation, event)
 		}
@@ -353,6 +362,12 @@ func failLocalOperation(current Operation, err error) Operation {
 				return *step.Operation
 			}
 		}
+	case TypeViewImage:
+		step, stateErr := failViewImage(current, err)
+		if stateErr != nil {
+			panic(fmt.Errorf("fail validated view-image operation %q: %w", current.ID, stateErr))
+		}
+		return *step.Operation
 	case TypeRemoteJob:
 		step, stateErr := FailRemoteJob(current, err)
 		if stateErr != nil {

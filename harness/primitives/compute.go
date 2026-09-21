@@ -39,6 +39,7 @@ func runCompute(ctx context.Context, request ComputeRequest, events chan<- Primi
 	// Defer event delivery because runtime.Goexit runs defers without returning to the caller.
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("compute callback panicked: %v", recovered)
 		} else if !returned {
 			err = errors.New("compute callback exited without returning")
 		}

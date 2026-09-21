@@ -29,6 +29,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore/localfile"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
+	"github.com/unreallabsai/unreal-agent/harness/tool/viewimage"
 )
 
 const (

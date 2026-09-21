@@ -47,6 +47,21 @@ func staticDefinitions() []Definition {
 		}},
 		{Tool: llm.Tool{
 			Type:        llm.ToolFunction,
+			Name:        ViewImageName,
+			Description: "View a local JPEG, PNG, BMP, TIFF, or WebP image.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Image file path, absolute or relative to the workspace.",
+					},
+				},
+				"required": []any{"path"},
+			},
+		}},
+		{Tool: llm.Tool{
+			Type:        llm.ToolFunction,
 			Name:        SkillUseName,
 			Description: "Load the instructions for a registered skill.",
 			Parameters: map[string]any{

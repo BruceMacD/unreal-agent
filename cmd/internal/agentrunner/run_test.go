@@ -106,6 +106,8 @@ description: Review code.
 		!slices.Equal(messages[1:], wantMessages) {
 		t.Fatalf("messages = %#v, want system preamble plus %#v", messages, wantMessages)
 	}
+	if len(request.Tools) != 3 || !containsTool(request.Tools, "Bash") || !containsTool(request.Tools, "ViewImage") || !containsTool(request.Tools, "SkillUse") {
+		t.Fatalf("tools = %#v, want Bash, ViewImage, and SkillUse", request.Tools)
 	}
 	assertItemSequence(t, stdout.String(),
 		"input.control input.external input.external input.control turn model_response",

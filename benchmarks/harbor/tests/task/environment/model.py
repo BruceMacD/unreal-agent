@@ -1,6 +1,7 @@
 """A deterministic Responses API implementation for the container smoke test."""
 
 import json
+import struct
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -31,13 +32,31 @@ class Model(BaseHTTPRequestHandler):
             if item.get("type") == "function_call"
         }
         if "plain" not in calls:
+            output = self.tool(
+                "plain",
+                "Bash",
+                {
+                    "command": "printf test; printf done > /app/answer",
+                    "max_output_length": 40,
+                },
+            )
         elif "plain" not in outputs:
             output = self.message("Waiting for the first command.")
         elif "bounded" not in calls:
             output = self.tool(
+                "bounded",
+                "Bash",
+                {
+                    "command": 'python -c \'print("α" * 100 + "tail", end="")\'',
+                    "max_output_length": 12,
+                },
             )
         elif "bounded" not in outputs:
             output = self.message("Waiting for the second command.")
+        elif "image" not in calls:
+            output = self.tool("image", "ViewImage", {"path": "image.bmp"})
+        elif "image" not in outputs:
+            output = self.message("Waiting for the image.")
         else:
             output = self.message("done")
         response = {
@@ -67,11 +86,14 @@ class Model(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     @staticmethod
+    def tool(call_id, name, arguments):
         return {
             "id": "fc-" + call_id,
             "type": "function_call",
             "call_id": call_id,
+            "name": name,
             "status": "completed",
+            "arguments": json.dumps(arguments),
         }
 
     @staticmethod
@@ -86,5 +108,11 @@ class Model(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    pixels = b"\x00\x80\xff" * 4000 * 2
+    header = struct.pack("<2sIHHI", b"BM", 54 + len(pixels), 0, 0, 54)
+    header += struct.pack(
+        "<IIIHHIIIIII", 40, 4000, 2, 1, 24, 0, len(pixels), 0, 0, 0, 0
+    )
+    Path("/app/image.bmp").write_bytes(header + pixels)
     with HTTPServer(("0.0.0.0", 8765), Model) as server:
         server.serve_forever()

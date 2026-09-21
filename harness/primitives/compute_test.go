@@ -226,6 +226,7 @@ func TestComputeRecoversCallbackPanics(t *testing.T) {
 					}
 				} else {
 					result := eventResult[primitives.PrimitiveFailureResult](t, event)
+					if result.Error != "compute callback panicked: "+test.message {
 						t.Fatalf("panic diagnostics = %q", result.Error)
 					}
 				}

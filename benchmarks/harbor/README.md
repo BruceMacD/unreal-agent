@@ -50,6 +50,9 @@ uv run --project benchmarks/harbor --locked --extra modal harbor run \
 Inspect results with `harbor view jobs/<job-name>`.
 
 
+- ViewImage returns images within 2000×2000 pixels and 5 MB minus 1 KB of base64
+  content. Trajectories reference the returned images under `agent/images/` and
+  include original format and coordinate-scaling metadata when applicable.
 - Logs and sessions are under `agent/`; `agent/trajectory.json` contains ATIF
 - Observations are grouped by tool call. Their `extra` sequence, timestamp, and
 

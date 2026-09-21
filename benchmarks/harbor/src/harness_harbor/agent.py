@@ -51,6 +51,7 @@ class UnrealAgent(BaseInstalledAgent):
                 "Model must use the openai/, openrouter/ or fireworks_ai/ prefix"
             )
         # A task may declare MCP servers or a skills directory for agents that use
+        # them; this integration exposes Bash and ViewImage, so they are recorded in
         # the trajectory metadata rather than failing the trial.
         self._not_offered = {
             key: value
@@ -188,6 +189,9 @@ class UnrealAgent(BaseInstalledAgent):
             }
             return
         with records_path.open() as records:
+            trajectory = convert(
+                records, identity, self._runner_session, output_dir=self.logs_dir
+            )
         (self.logs_dir / "trajectory.json").write_text(
             json.dumps(trajectory.to_json_dict(), ensure_ascii=False, indent=2) + "\n"
         )

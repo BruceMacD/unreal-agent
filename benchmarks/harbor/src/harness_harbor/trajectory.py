@@ -1,10 +1,15 @@
+import base64
+import hashlib
 import json
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from harbor.models.trajectories import (
     Agent,
+    ContentPart,
     FinalMetrics,
+    ImageSource,
     Metrics,
     Observation,
     ObservationResult,
@@ -66,6 +71,84 @@ def bash_result(data: dict[str, Any]) -> str:
     return "\n".join(parts) if parts else "(no output)"
 
 
+def view_image_result(
+    data: dict[str, Any], output_dir: Path | None
+) -> str | list[ContentPart]:
+    status = data["Status"]
+    operations = {op["ID"]: op for op in data.get("Operations", [])}
+    waiting = status.get("WaitingFor") or []
+    if status.get("Error"):
+        if waiting or operations:
+            raise ValueError(
+                "ViewImage call has both a validation error and operations"
+            )
+        return "Error: " + status["Error"]
+    if len(waiting) != 1:
+        raise ValueError(f"ViewImage call has {len(waiting)} operations, want 1")
+    op = operations[waiting[0]]
+    if op["Type"] != "view_image":
+        raise ValueError(f"Unsupported operation type: {op['Type']}")
+    if op["Status"] in {"ready", "awaiting", "canceling"}:
+        return RUNNING
+    if op["Status"] not in TERMINAL:
+        raise ValueError(f"Unsupported operation status: {op['Status']}")
+
+    failed = op["Status"] != "completed"
+    value = op["State"].get("Result") or {}
+    details = []
+    if failed:
+        error = value.get("Error") or "view-image operation " + op["Status"]
+        details.append("Error: " + error)
+    elif (
+        not value.get("Content")
+        or value.get("EncodedMIMEType") not in {"image/jpeg", "image/png"}
+        or not 0 < value.get("ScaleRatio", 0) <= 1
+        or value.get("Error")
+    ):
+        raise ValueError("Completed ViewImage operation has an invalid image result")
+
+    original = value.get("OriginalMIMEType")
+    if original and (failed or original != value.get("EncodedMIMEType")):
+        details.append("original MIME type: " + original)
+    width, height = value.get("OriginalWidth", 0), value.get("OriginalHeight", 0)
+    ratio = value.get("ScaleRatio", 1)
+    if width > 0 and height > 0 and (failed or ratio < 1):
+        details.append(f"original dimensions: {width}x{height}")
+    if failed:
+        return "; ".join(details)
+    if ratio < 1:
+        details.append(
+            f"multiply coordinates by {1 / ratio:.2f} to approximate original"
+        )
+
+    if output_dir is None:
+        raise ValueError("ViewImage observations require an output directory")
+    image = base64.b64decode(value["Content"], validate=True)
+    extension = "jpg" if value["EncodedMIMEType"] == "image/jpeg" else "png"
+    relative = Path("images") / f"{hashlib.sha256(image).hexdigest()}.{extension}"
+    path = output_dir / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(image)
+    content = [
+        ContentPart(
+            type="image",
+            source=ImageSource(
+                media_type=value["EncodedMIMEType"], path=relative.as_posix()
+            ),
+        )
+    ]
+    if details:
+        content.append(ContentPart(type="text", text="; ".join(details)))
+    return content
+
+
+def convert(
+    lines: Iterable[str],
+    agent: Agent,
+    session_id: str,
+    *,
+    output_dir: Path | None = None,
+) -> Trajectory:
     steps: list[Step] = []
     calls: dict[str, tuple[Step, str]] = {}
     pending_observations: list[ObservationResult] = []
@@ -178,6 +261,8 @@ def bash_result(data: dict[str, Any]) -> str:
             step, name = calls[data["CallID"]]
             if name == "Bash":
                 content = bash_result(data)
+            elif name == "ViewImage":
+                content = view_image_result(data, output_dir)
             elif data["Status"].get("Error") and not data.get("Operations"):
                 content = data["Status"]["Error"]
             else:

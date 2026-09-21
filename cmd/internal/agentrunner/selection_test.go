@@ -23,6 +23,13 @@ func TestRunSelectsToolsFromStartupConfiguration(t *testing.T) {
 		disallowed []string
 		want       []string
 	}{
+		{name: "no integrations", want: []string{"Bash", "ViewImage"}},
+		{name: "valid skill", skill: "---\nname: review\ndescription: Review code.\n---\n", want: []string{"Bash", "ViewImage", "SkillUse"}},
+		{name: "disallowed SkillUse", skill: "---\nname: review\ndescription: Review code.\n---\n", disallowed: []string{"SkillUse"}, want: []string{"Bash", "ViewImage"}},
+		{name: "disallowed ViewImage", disallowed: []string{"ViewImage"}, want: []string{"Bash"}},
+		{name: "malformed skill", skill: "invalid", want: []string{"Bash", "ViewImage"}},
+		{name: "incomplete skill", skill: "---\nname: review\n---\n", want: []string{"Bash", "ViewImage"}},
+		{name: "empty selection", disallowed: []string{"Bash", "ViewImage"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
