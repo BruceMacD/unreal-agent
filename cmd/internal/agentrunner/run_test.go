@@ -81,6 +81,7 @@ description: Review code.
 		}`),
 		&stdout,
 		&stderr,
+		testConfig(client),
 	)
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
@@ -183,6 +184,7 @@ func TestRunMainUsesProviderAuthenticationConfiguration(t *testing.T) {
 					"CUSTOM_CREDENTIAL":    test.providerKey,
 					"CUSTOM_API_KEY":       "must-not-use",
 				}[name]
+			}, func() []string { return nil }, strings.NewReader(`{"prompt":"hello"}`), io.Discard, &stderr, Config{Name: "unreal-agent-runner", ParseRequest: parseTestRequest, Providers: providers})
 			if test.wantError {
 				if code != 1 || created || !strings.Contains(stderr.String(), test.keyEnvironment) {
 					t.Fatalf("exit = %d, client created = %v, stderr = %s", code, created, stderr.String())
@@ -250,6 +252,7 @@ func TestRunMainUsesLLMConfigurationFromEnvironment(t *testing.T) {
 		}`),
 		&stdout,
 		&stderr,
+		Config{Name: "unreal-agent-runner", ParseRequest: parseTestRequest, Providers: providers},
 	)
 	if code != 0 || !selected {
 		t.Fatalf("exit = %d, selected = %t, stderr = %q", code, selected, stderr.String())
@@ -344,6 +347,7 @@ func TestRunMainExecutesBashToolToCompletion(t *testing.T) {
 				strings.NewReader(`{"messages":[{"role":"user","content":"run it"}],"model":"gpt-test"}`),
 				&stdout,
 				&stderr,
+				testConfig(client),
 			)
 			if code != 0 {
 				t.Fatalf("exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
@@ -371,6 +375,7 @@ func TestRunMainEmitsValidationError(t *testing.T) {
 		strings.NewReader(`{"messages":[],"thinking_level":"maximum"}`),
 		&stdout,
 		&stderr,
+		testConfig(&fakeClient{}),
 	)
 	if code != 1 {
 		t.Fatalf("exit = %d", code)
@@ -385,6 +390,8 @@ func TestRunMainEmitsValidationError(t *testing.T) {
 
 func TestValidateRequestRejectsNonUUIDMessageID(t *testing.T) {
 	messageID := "message-1"
+	_, err := validateRequest(Request{
+		Messages: []RequestMessage{{Content: "hello", MessageID: &messageID}},
 	})
 	if err == nil || err.Error() != "messages[0].message_id must be a UUID" {
 		t.Fatalf("error = %v", err)
@@ -444,6 +451,8 @@ func (client *fakeClient) Close() error {
 	return nil
 }
 
+func testConfig(client Client) Config {
+	return Config{Name: "unreal-agent-runner", ParseRequest: parseTestRequest, Providers: []Provider{{
 		Name: "openai", BaseURL: "https://example.com",
 		DefaultModel:      "gpt-default",
 		APIKeyEnvironment: "OPENAI_API_KEY",
@@ -453,6 +462,7 @@ func (client *fakeClient) Close() error {
 			}
 			return client, nil
 		},
+	}}}
 }
 
 func eventTypes(t *testing.T, output string) []string {
@@ -557,6 +567,7 @@ func TestReasoningEffortMapsEveryThinkingLevel(t *testing.T) {
 		}
 	}
 	for _, level := range []string{"xhigh", "max"} {
+		if _, err := validateRequest(Request{Prompt: new(string), ThinkingLevel: level}); err != nil {
 			t.Errorf("validateRequest(thinking_level=%q) = %v, want nil", level, err)
 		}
 	}

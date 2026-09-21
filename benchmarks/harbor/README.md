@@ -1,5 +1,7 @@
 # Harbor evaluation adapter
 
+Evaluates `unreal-agent-runner` as `unreal-agent` with Harbor 0.22.0. Requires Go
+from the root `go.mod`, Python 3.12+, uv, and Docker or Modal.
 
 ## Setup and build
 
@@ -11,6 +13,9 @@ make -C benchmarks/harbor build REVISION=HEAD
 ```
 
 Builds committed source into `bin/harbor/<short-commit>/` with a revision and
+checksum manifest. Defaults to Linux amd64. Existing bundles are not overwritten;
+set `BUNDLE` to a new directory to rebuild.
+
 
 ## Run
 
@@ -49,12 +54,16 @@ uv run --project benchmarks/harbor --locked --extra modal harbor run \
 
 Inspect results with `harbor view jobs/<job-name>`.
 
+## Output
 
+- Bash and ViewImage tools.
 - ViewImage returns images within 2000×2000 pixels and 5 MB minus 1 KB of base64
   content. Trajectories reference the returned images under `agent/images/` and
   include original format and coordinate-scaling metadata when applicable.
 - Logs and sessions are under `agent/`; `agent/trajectory.json` contains ATIF
+  observations and token totals.
 - Observations are grouped by tool call. Their `extra` sequence, timestamp, and
+  `available_before_turn` fields preserve asynchronous timing.
 
 ## Validation
 
@@ -63,5 +72,6 @@ make -C benchmarks/harbor test check
 make -C benchmarks/harbor smoke BUNDLE=../../bin/harbor/<short-commit>
 ```
 
+The smoke test uses Docker and a local test model.
 
 Reference: [Harbor agents](https://www.harborframework.com/docs/agents).

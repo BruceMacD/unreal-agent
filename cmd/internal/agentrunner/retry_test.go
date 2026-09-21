@@ -44,6 +44,8 @@ func TestRunMainRequestDisablesRetries(t *testing.T) {
 	client := &fakeClient{respond: func(context.Context, llm.Request) (llm.Response, error) {
 		return llm.Response{ID: "response-1", Stop: llm.StopComplete}, nil
 	}}
+	config := testConfig(client)
+	config.Providers[0].NewClient = func(_, _ string, maxAttempts int, _ func(string) string) (Client, error) {
 		if maxAttempts != 1 {
 			return nil, errors.New("request did not disable retries")
 		}
@@ -60,6 +62,7 @@ func TestRunMainRequestDisablesRetries(t *testing.T) {
 				return ""
 			}
 		}, func() []string { return nil }, strings.NewReader(`{"prompt":"hello","max_attempts":1}`),
+		io.Discard, io.Discard, config)
 	if code != 0 || !client.closed {
 		t.Fatalf("exit = %d, client closed = %v", code, client.closed)
 	}

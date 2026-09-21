@@ -1,3 +1,4 @@
+package agentrunner
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 )
 
 func TestRunnerProviderRetries(t *testing.T) {
+	for _, provider := range DefaultProviders() {
 		for _, maxAttempts := range []int{1, 2} {
 			t.Run(provider.Name+"/"+strconv.Itoa(maxAttempts), func(t *testing.T) {
 				t.Parallel()
@@ -33,6 +35,7 @@ func TestRunnerProviderRetries(t *testing.T) {
 				defer server.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
+				code := RunMain(ctx,
 					[]string{"-workspace", t.TempDir(), "-session-directory", t.TempDir()},
 					func(name string) string {
 						switch name {
@@ -51,6 +54,7 @@ func TestRunnerProviderRetries(t *testing.T) {
 						}
 					}, func() []string { return nil },
 					strings.NewReader(`{"prompt":"hello","model":"test","max_attempts":`+strconv.Itoa(maxAttempts)+`}`),
+					io.Discard, io.Discard, Config{Name: "unreal-agent-runner", ParseRequest: parseTestRequest, Providers: DefaultProviders()})
 				if code != 1 || attempts.Load() != int64(maxAttempts) {
 					t.Fatalf("exit = %d, attempts = %d, want %d", code, attempts.Load(), maxAttempts)
 				}
@@ -60,6 +64,7 @@ func TestRunnerProviderRetries(t *testing.T) {
 }
 
 func TestRunnerProviderDefaultModels(t *testing.T) {
+	for _, provider := range DefaultProviders() {
 		want := ""
 		if provider.Name == "openai" {
 			want = "gpt-6-astra"
@@ -89,12 +94,14 @@ func TestRunnerCodexUsesSubscriptionWithoutAPIKey(t *testing.T) {
 	}))
 	defer server.Close()
 	var output, stderr strings.Builder
+	code := RunMain(t.Context(), []string{"-workspace", t.TempDir(), "-session-directory", t.TempDir()}, func(key string) string {
 		return map[string]string{
 			"UNREAL_HARNESS_LLM_PROVIDER": "openai-codex",
 			"UNREAL_HARNESS_LLM_BASE_URL": server.URL,
 			"OPENAI_CODEX_ACCESS_TOKEN":   "subscription-token",
 			"OPENAI_CODEX_ACCOUNT_ID":     "account",
 		}[key]
+	}, func() []string { return nil }, strings.NewReader(`{"prompt":"hello","model":"gpt-test","system_prompt":"my system prompt"}`), &output, &stderr, Config{Name: "unreal-agent-runner", ParseRequest: parseTestRequest, Providers: DefaultProviders()})
 	if code != 0 || !strings.Contains(output.String(), "subscription works") {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}

@@ -38,6 +38,9 @@ type StaticTranslators struct {
 
 func NewRegistry(configured StaticTranslators, enabled ...string) Registry {
 	current := &registry{
+		enabled:        make(map[string]struct{}, len(enabled)),
+		skills:         make(map[RegistrationID]Skill),
+		skillIDsByPath: make(map[string]RegistrationID),
 	}
 	for _, name := range enabled {
 		current.enabled[name] = struct{}{}
@@ -73,6 +76,7 @@ func (current *registry) Resolve(name string) (Translator, bool) {
 		}
 		return translator, true
 	}
+	return nil, false
 }
 
 func (current *registry) RegisterSkill(skill Skill) (RegistrationID, error) {

@@ -43,6 +43,7 @@ func TestRunResumesAfterOutputFailure(t *testing.T) {
 							return "secret"
 						}
 						return ""
+					}, func() []string { return nil }, strings.NewReader(request), output, io.Discard, testConfig(client))
 			}
 			want := errors.New("output unavailable")
 			if err := run(&failingItemWriter{kind: test.kind, inputKind: test.inputKind, err: want}); !errors.Is(err, want) {
@@ -116,6 +117,7 @@ func TestRunMainResumesInterruptedDeliveryWithDuplicateInput(t *testing.T) {
 							return ""
 						}
 					}, func() []string { return []string{"PATH=/usr/bin:/bin"} },
+					strings.NewReader(request), &stdout, &stderr, testConfig(client))
 				return code, stdout.String(), stderr.String()
 			}
 			hasResult := func(request llm.Request) bool {
@@ -253,6 +255,7 @@ func TestRunResumesSessionWithoutRecordedSettings(t *testing.T) {
 		}, func() []string { return nil }, strings.NewReader(`{
 			"session_id":"legacy", "model":"selected-model", "thinking_level":"medium",
 			"messages":[{"role":"user","content":"hello","message_id":"69621f8d-4f4d-49a5-8f7d-3b24fd855c01"}]
+		}`), &output, io.Discard, testConfig(client))
 	if err != nil || client.calls != 1 {
 		t.Fatalf("legacy session: calls=%d, error=%v", client.calls, err)
 	}

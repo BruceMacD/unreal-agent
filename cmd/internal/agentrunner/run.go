@@ -62,8 +62,20 @@ type Provider struct {
 	NewClient         func(apiKey, baseURL string, maxAttempts int, getenv func(string) string) (Client, error)
 }
 
+type Request struct {
+	Messages               []RequestMessage `json:"messages"`
+	Prompt                 *string          `json:"prompt"`
+	SystemPrompt           *string          `json:"system_prompt"`
+	Model                  string           `json:"model"`
+	MaxAttempts            *int             `json:"max_attempts"`
+	SessionID              *string          `json:"session_id"`
+	ThinkingLevel          string           `json:"thinking_level"`
+	IncludePartialMessages *bool            `json:"include_partial_messages"`
+	ExtraAllowedTools      []string         `json:"extra_allowed_tools"`
+	DisallowedTools        []string         `json:"disallowed_tools"`
 }
 
+type RequestMessage struct {
 	Role      string  `json:"role"`
 	Content   string  `json:"content"`
 	MessageID *string `json:"message_id"`
@@ -101,7 +113,9 @@ func RunMain(
 	input io.Reader,
 	output io.Writer,
 	stderr io.Writer,
+	config Config,
 ) int {
+	err := Run(ctx, args, getenv, environ, input, output, stderr, config)
 	if err == nil {
 		return 0
 	}
@@ -117,6 +131,11 @@ func RunMain(
 	} else if _, writeErr := fmt.Fprintf(output, "%s\n", encoded); writeErr != nil {
 		err = errors.Join(err, fmt.Errorf("write error event: %w", writeErr))
 	}
+	prefix := ""
+	if config.Name != "" {
+		prefix = config.Name + ": "
+	}
+	if _, writeErr := fmt.Fprintf(stderr, "%s%v\n", prefix, err); writeErr != nil {
 		return 1
 	}
 	return 1
@@ -130,7 +149,15 @@ func Run(
 	input io.Reader,
 	output io.Writer,
 	flagOutput io.Writer,
+	config Config,
 ) (runErr error) {
+	if strings.TrimSpace(config.Name) == "" {
+		return errors.New("runner name must be set")
+	}
+	if config.ParseRequest == nil {
+		return errors.New("request parser must be set")
+	}
+	flags := flag.NewFlagSet(config.Name, flag.ContinueOnError)
 	flags.SetOutput(flagOutput)
 	sessionDirectory := flags.String("session-directory", defaultSessionDirectory, "directory containing session files")
 	workspaceDirectory := flags.String("workspace", ".", "agent workspace and Bash working directory")
@@ -146,8 +173,12 @@ func Run(
 		return errors.New("tool heartbeat interval must not be negative")
 	}
 
+	parsed, newTools, err := config.ParseRequest(input)
 	if err != nil {
 		return err
+	}
+	if newTools == nil {
+		return errors.New("request parser returned no tool factory")
 	}
 	messages, err := validateRequest(parsed)
 	if err != nil {
@@ -181,6 +212,7 @@ func Run(
 	if providerName == "" {
 		providerName = defaultProvider
 	}
+	selected, err := selectProvider(config.Providers, providerName)
 	if err != nil {
 		return err
 	}
@@ -257,9 +289,33 @@ func Run(
 		shell = "/bin/sh"
 	}
 	skills, skillErrors := tool.DiscoverSkills(filepath.Join(workspace, ".harness", "skills"))
+	names := []string{tool.BashName, tool.ViewImageName}
 	if len(skills) != 0 {
+		names = append(names, tool.SkillUseName)
 	}
+	toolConfig := ToolConfig{
+		SessionID: sessionID, Getenv: getenv, Names: names,
+		Translators: tool.StaticTranslators{
+			Bash: bash.New(bash.Config{
+				Shell:         shell,
+				Directory:     workspace,
+				BaseDirectory: operationDirectory,
+			}),
+			ViewImage: viewimage.New(viewimage.Config{Directory: workspace}),
+		},
 	}
+	configuredTools, err := newTools(runContext, toolConfig)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cancel()
+		if configuredTools.Close != nil {
+			runErr = errors.Join(runErr, configuredTools.Close())
+		}
+	}()
+	registry := configuredTools.Registry
+	if _, enabled := registry.Resolve(tool.SkillUseName); enabled {
 		for _, skill := range skills {
 			if _, err := registry.RegisterSkill(skill); err != nil {
 				return fmt.Errorf("register skill %q: %w", skill.Path, err)
@@ -272,6 +328,7 @@ func Run(
 		}
 	}
 
+	operations := operation.NewLocalOperationManager(runContext, configuredTools.RemoteJobs...)
 	inputs, err := inbox.New(runContext, restored.ExternalInputIDs)
 	if err != nil {
 		return fmt.Errorf("open inbox: %w", err)
@@ -393,13 +450,19 @@ func selectProvider(providers []Provider, name string) (Provider, error) {
 	return Provider{}, fmt.Errorf("unsupported provider %q; available providers: %s", name, strings.Join(names, ", "))
 }
 
+func DecodeRequest(input io.Reader, destination any) error {
 	raw, err := io.ReadAll(input)
 	if err != nil {
+		return fmt.Errorf("read input: %w", err)
 	}
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
+		return errors.New("empty input")
 	}
+	if err := json.Unmarshal(raw, destination, json.RejectUnknownMembers(true)); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
 	}
+	return nil
 }
 
 func resolveLogDirectory(workspace, configured string) string {
@@ -495,6 +558,7 @@ func (scope *environmentScope) Close() error {
 	return closeErr
 }
 
+func validateRequest(parsed Request) ([]RequestMessage, error) {
 	if parsed.SessionID != nil && strings.TrimSpace(*parsed.SessionID) == "" {
 		return nil, errors.New("session_id must not be empty")
 	}
@@ -515,6 +579,7 @@ func (scope *environmentScope) Close() error {
 		if parsed.Prompt == nil {
 			return nil, errors.New("messages must be set")
 		}
+		return []RequestMessage{{Content: *parsed.Prompt}}, nil
 	}
 	if len(parsed.Messages) == 0 {
 		return nil, errors.New("messages must not be empty")

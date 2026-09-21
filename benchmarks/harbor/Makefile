@@ -15,6 +15,7 @@ test:
 	uv run --locked python -m unittest discover -s tests -v
 
 build:
+	python3 build.py --revision "$(REVISION)" --runner "$(RUNNER)" --arch "$(ARCH)" --output "$(BUNDLE)"
 
 smoke:
 	uv run --locked python tests/smoke.py --bundle $(BUNDLE)

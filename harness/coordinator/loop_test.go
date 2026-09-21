@@ -24,8 +24,10 @@ import (
 )
 
 func TestCoordinatorRestoresSession(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	input := externalEvent(t, 1, "input-1", "hello")
 	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	response := llm.Response{
 		ID: "response-1",
 		Output: []llm.Item{
@@ -223,7 +225,9 @@ func TestCoordinatorRejectsSessionHistoryWithoutProgress(t *testing.T) {
 }
 
 func TestCoordinatorKeepsUnreplayableToolStatusInLocalState(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	turn := session.Turn{ID: "turn-1", Type: session.TurnRegular}
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	status := sessionstore.ToolCallStatus{
 		TurnID: turn.ID,
 		CallID: call.CallID,
@@ -271,6 +275,8 @@ func TestCoordinatorKeepsUnreplayableToolStatusInLocalState(t *testing.T) {
 }
 
 func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: operationStatusTranslator{}}, tool.ViewImageName)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	initial := operation.Operation{
 		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
 	}
@@ -331,6 +337,8 @@ func TestCoordinatorRestoresCompletedToolCallFromStatusSnapshots(t *testing.T) {
 }
 
 func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: operationStatusTranslator{}}, tool.ViewImageName)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	first := operation.Operation{
 		ID: "operation-1", Type: "test", Version: 1, Status: operation.StatusReady,
 	}
@@ -392,6 +400,7 @@ func TestCoordinatorOverlaysResumedOperationsAfterHistorySnapshots(t *testing.T)
 }
 
 func TestCoordinatorTracksToolCalls(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	current := newTestCoordinator(
 		emptyFakeStore(),
 		newTestInbox(t),
@@ -399,6 +408,8 @@ func TestCoordinatorTracksToolCalls(t *testing.T) {
 		contextbuilder.NewBuilder(),
 		registry,
 	)
+	first := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
+	second := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{"second":true}`}
 	for _, response := range []sessionstore.ModelResponse{
 		{
 			TurnID: "turn-1",
@@ -515,6 +526,7 @@ func TestCoordinatorToolCallOperationsAreTerminal(t *testing.T) {
 }
 
 func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
 		emptyFakeStore(),
@@ -523,6 +535,7 @@ func TestCoordinatorAddsToolResultFromTrackedToolCall(t *testing.T) {
 		builder,
 		registry,
 	)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	current.addToolCallsToLocalState(sessionstore.ModelResponse{
 		TurnID: "turn-1",
 		Response: llm.Response{Output: []llm.Item{{
@@ -580,6 +593,7 @@ func TestCoordinatorAcceptsOrphanedToolStatus(t *testing.T) {
 }
 
 func TestCoordinatorReturnsToolResultTranslationError(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: failingResultTranslator{err: errors.New("translation failed")}}, tool.ViewImageName)
 	current := newTestCoordinator(
 		emptyFakeStore(),
 		newTestInbox(t),
@@ -587,6 +601,7 @@ func TestCoordinatorReturnsToolResultTranslationError(t *testing.T) {
 		contextbuilder.NewBuilder(),
 		registry,
 	)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	current.addToolCallsToLocalState(sessionstore.ModelResponse{
 		TurnID: "turn-1",
 		Response: llm.Response{Output: []llm.Item{{
@@ -633,6 +648,7 @@ func TestCoordinatorSkipsToolResultWithoutAvailableTranslator(t *testing.T) {
 }
 
 func TestCoordinatorSkipsToolResultWithUntrackedOperation(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	current := newTestCoordinator(
 		emptyFakeStore(),
 		newTestInbox(t),
@@ -640,6 +656,7 @@ func TestCoordinatorSkipsToolResultWithUntrackedOperation(t *testing.T) {
 		contextbuilder.NewBuilder(),
 		registry,
 	)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName}
 	current.addToolCallsToLocalState(sessionstore.ModelResponse{
 		TurnID: "turn-1",
 		Response: llm.Response{Output: []llm.Item{{
@@ -1190,10 +1207,13 @@ func TestCoordinatorRunStartsContinuationTurnForCompletedToolCall(t *testing.T) 
 }
 
 func TestCoordinatorRunBatchesCompletedToolCallsIntoOneTurn(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	operationValue := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
 	}
 	calls := []llm.ToolCall{
+		{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`},
+		{CallID: "call-2", Name: tool.ViewImageName, Arguments: `{}`},
 	}
 	status := tool.CallStatus{WaitingFor: []operation.ID{operationValue.ID}}
 	store := emptyFakeStore()
@@ -1815,6 +1835,7 @@ func TestCoordinatorRunStoresOperationUpdatesWithoutRedispatch(t *testing.T) {
 }
 
 func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	store := emptyFakeStore()
 	builder := contextbuilder.NewBuilder()
 	current := newTestCoordinator(
@@ -1824,6 +1845,7 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 		builder,
 		registry,
 	)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	if _, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemModelResponse,
 		Data: sessionstore.ModelResponse{
@@ -1910,9 +1932,11 @@ func TestCoordinatorReconcilesToolCallsFromPersistedOperationUpdates(t *testing.
 }
 
 func TestCoordinatorRunReturnsReconciliationError(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: terminalResultTranslator{}}, tool.ViewImageName)
 	value := operation.Operation{
 		ID: "operation-1", Type: operation.TypeShell, Version: 1, Status: operation.StatusReady,
 	}
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	status := sessionstore.ToolCallStatus{
 		TurnID: "turn-1",
 		CallID: call.CallID,
@@ -1957,6 +1981,7 @@ func TestCoordinatorRunReturnsReconciliationError(t *testing.T) {
 }
 
 func TestCoordinatorDoesNotCompleteToolCallBeforeOperationIsStored(t *testing.T) {
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: testTranslator{}}, tool.ViewImageName)
 	store := emptyFakeStore()
 	store.saveOperationErr = errors.New("disk unavailable")
 	builder := contextbuilder.NewBuilder()
@@ -1967,6 +1992,7 @@ func TestCoordinatorDoesNotCompleteToolCallBeforeOperationIsStored(t *testing.T)
 		builder,
 		registry,
 	)
+	call := llm.ToolCall{CallID: "call-1", Name: tool.ViewImageName, Arguments: `{}`}
 	current.addToolCallsToLocalState(sessionstore.ModelResponse{
 		TurnID: "turn-1",
 		Response: llm.Response{Output: []llm.Item{{

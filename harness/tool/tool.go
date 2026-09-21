@@ -1,3 +1,4 @@
+// Package tool defines model-visible tool selection and pure translation
 // between model tool calls and durable operations.
 package tool
 

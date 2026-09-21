@@ -306,6 +306,7 @@ func requestTool(source llm.Tool) (openaiapi.Tool, error) {
 	case llm.ToolFunction:
 		parameters := source.Parameters
 		// The wire requires the field. The harness validates tool calls itself, and provider
+		// schema enforcement would reject the loose schemas that external tools contribute.
 		strict := false
 		function := openaiapi.FunctionTool{
 			Name:       source.Name,

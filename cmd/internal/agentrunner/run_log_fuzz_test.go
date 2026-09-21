@@ -44,7 +44,9 @@ func FuzzRunLogMatchesExecution(f *testing.F) {
 			}
 			const id session.ID = "execution"
 			messageID := "69621f8d-4f4d-49a5-8f7d-3b24fd855c01"
+			encodedRequest := logJSON(t, Request{
 				SessionID: new(string(id)), Model: "journal-model",
+				Messages: []RequestMessage{
 					{Role: "user", Content: text, MessageID: &messageID},
 					{Role: "user", Content: text, MessageID: &messageID},
 				},
@@ -119,6 +121,7 @@ func FuzzRunLogMatchesExecution(f *testing.F) {
 							return "secret"
 						}
 						return ""
+					}, func() []string { return nil }, bytes.NewReader(encodedRequest), destination, io.Discard, testConfig(client))
 				cancel()
 				synctest.Wait()
 				var wantErr error

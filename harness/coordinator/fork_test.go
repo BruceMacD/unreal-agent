@@ -68,6 +68,7 @@ func TestCoordinatorForkStopsWhenChildIsIdle(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					registry := tool.NewRegistry(tool.StaticTranslators{Bash: &submittingTranslator{specs: []operation.Spec{spec}}, ViewImage: testTranslator{}}, tool.BashName, tool.ViewImageName)
 					child.current.dependencies.Tools = registry
 					child.start(t)
 					child.assertRunning(t)

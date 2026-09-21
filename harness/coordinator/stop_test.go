@@ -15,6 +15,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
 func TestCoordinatorRemainsAvailableUntilStop(t *testing.T) {
@@ -189,6 +190,7 @@ func TestCoordinatorHardStopDiscardsLateModelResponse(t *testing.T) {
 		run.input(t, stopInput(t, "stop", inbox.StopHard))
 		run.assertRunning(t)
 		run.respond(t, 0, llm.Response{Output: []llm.Item{{
+			Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "late", Name: tool.ViewImageName, Arguments: `{}`},
 		}}})
 		if len(run.store.appendedResponses) != 0 || len(run.store.appendedStatuses) != 0 || len(run.calls) != 1 {
 			t.Fatal("late response was recorded or translated during cancellation")

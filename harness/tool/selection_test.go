@@ -7,6 +7,7 @@ import (
 )
 
 func TestRegistryKeepsSelectedStaticToolsAcrossCatalogChanges(t *testing.T) {
+	allNames := []string{BashName, ViewImageName, SkillUseName}
 	for selection := range 1 << len(allNames) {
 		t.Run(fmt.Sprint(selection), func(t *testing.T) {
 			var enabled []string
@@ -54,10 +55,12 @@ func TestRegistryKeepsSelectedStaticToolsAcrossCatalogChanges(t *testing.T) {
 
 func TestRegistryDoesNotResolveUnselectedTranslators(t *testing.T) {
 	registry := NewRegistry(StaticTranslators{
+		Bash: &fixedTranslator{}, ViewImage: &fixedTranslator{},
 	})
 	if got := registry.StaticDefinitions(); len(got) != 0 {
 		t.Fatalf("empty selection advertises %v", got)
 	}
+	for _, name := range []string{BashName, ViewImageName, SkillUseName} {
 		translator, exists := registry.Resolve(name)
 		if exists || translator != nil {
 			t.Fatalf("unselected %s resolves to (%T, %t)", name, translator, exists)

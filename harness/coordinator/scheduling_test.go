@@ -308,6 +308,7 @@ func TestCoordinatorRunPersistsCompletedUpdatesBeforeClosure(t *testing.T) {
 
 func independentToolCalls(t *testing.T, count int) (*fakeStore, tool.Registry) {
 	t.Helper()
+	registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: operationStatusTranslator{}}, tool.ViewImageName)
 	store := emptyFakeStore()
 	store.items = []sessionstore.Item{
 		storedItem(1, sessionstore.ItemTurn, session.Turn{ID: "turn-1", Type: session.TurnRegular}),
@@ -319,6 +320,7 @@ func independentToolCalls(t *testing.T, count int) (*fakeStore, tool.Registry) {
 			ID: operation.ID(fmt.Sprintf("operation-%d", index)), Type: operation.TypeShell,
 			Version: 1, Status: operation.StatusAwaiting,
 		}
+		call := llm.ToolCall{CallID: fmt.Sprintf("call-%d", index), Name: tool.ViewImageName, Arguments: `{}`}
 		response.Response.Output = append(response.Response.Output, llm.Item{Type: llm.ItemToolCall, Data: call})
 		store.resume.Operations = append(store.resume.Operations, value)
 		store.items = append(store.items,

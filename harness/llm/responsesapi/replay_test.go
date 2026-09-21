@@ -50,6 +50,7 @@ func TestRequestBodyReplaysRejectedToolCallFromHistory(t *testing.T) {
 	builder.AddModelResponse(response)
 	builder.AddToolResult(result.CallID, result.Output, false)
 	builder.Commit()
+	validCall := llm.ToolCall{CallID: "call-2", Name: "Search", Arguments: ` {"query":"weather"} `}
 	builder.AddModelResponse(llm.Response{Output: []llm.Item{{Type: llm.ItemToolCall, Data: validCall}}})
 	builder.AddToolResult(validCall.CallID, []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: "found"}}, false)
 	built, err := builder.Build()

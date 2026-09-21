@@ -27,6 +27,15 @@ func (translator unavailableTranslator) errorMessage() string {
 	return fmt.Sprintf("static tool %q is not configured", translator.name)
 }
 
+func StaticNames() []string {
+	definitions := staticDefinitions()
+	names := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		names = append(names, definition.Tool.Name)
+	}
+	return names
+}
+
 func staticDefinitions() []Definition {
 	return []Definition{
 		{Tool: llm.Tool{

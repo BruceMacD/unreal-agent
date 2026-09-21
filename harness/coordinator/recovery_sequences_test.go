@@ -244,6 +244,7 @@ func TestCoordinatorRetriesInitialToolStatusPersistenceFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 		translator := &submittingTranslator{specs: []operation.Spec{spec}}
+		registry := tool.NewRegistry(tool.StaticTranslators{ViewImage: translator}, tool.ViewImageName)
 		run.current.dependencies.Tools = registry
 		want := errors.New("cannot persist initial tool status")
 		restoreTestRun(t, run, &recoveryFailureStore{Store: store, statusErr: want})

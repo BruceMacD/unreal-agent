@@ -243,6 +243,7 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 		}
 		translator := &submissionTranslator{}
 		translator.specs = []operation.Spec{spec}
+		run.current.dependencies.Tools = tool.NewRegistry(tool.StaticTranslators{Bash: translator, ViewImage: operationStatusTranslator{}}, tool.BashName, tool.ViewImageName)
 		restoreTestRun(t, run, store)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -254,6 +255,7 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 		dispatches := len(run.operations.adds)
 		response := llm.Response{Output: []llm.Item{
 			{ProviderID: "reasoning", Type: llm.ItemReasoning, Data: llm.Reasoning{Raw: jsontext.Value(`{"id":"reasoning","type":"reasoning","summary":[],"encrypted_content":"opaque"}`)}},
+			{ProviderID: "item-C", Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "C", Name: tool.BashName, Arguments: `{}`}},
 		}}
 		run.respond(t, 0, response)
 		if run.requestCount() != 1 {
@@ -295,6 +297,7 @@ func TestCoordinatorStartsNewToolWhileDeliveringPreviousCompletion(t *testing.T)
 			t.Fatal(err)
 		}
 		resumed := newStopTestRun(t, 0)
+		resumed.current.dependencies.Tools = tool.NewRegistry(tool.StaticTranslators{Bash: translator, ViewImage: operationStatusTranslator{}}, tool.BashName, tool.ViewImageName)
 		restoreTestRun(t, resumed, store)
 		resumed.start(t)
 		if len(resumed.calls) != 1 || !reflect.DeepEqual(resumed.calls[0].request, want) || len(resumed.operations.adds) != 0 || len(translator.calls) != 1 {

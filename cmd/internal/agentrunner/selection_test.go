@@ -29,6 +29,7 @@ func TestRunSelectsToolsFromStartupConfiguration(t *testing.T) {
 		{name: "disallowed ViewImage", disallowed: []string{"ViewImage"}, want: []string{"Bash"}},
 		{name: "malformed skill", skill: "invalid", want: []string{"Bash", "ViewImage"}},
 		{name: "incomplete skill", skill: "---\nname: review\n---\n", want: []string{"Bash", "ViewImage"}},
+		{name: "disallowed tools", skill: "---\nname: review\ndescription: Review code.\n---\n", disallowed: []string{"Bash", "ViewImage", "SkillUse"}, want: nil},
 		{name: "empty selection", disallowed: []string{"Bash", "ViewImage"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -63,6 +64,7 @@ func TestRunSelectsToolsFromStartupConfiguration(t *testing.T) {
 					return "secret"
 				}
 				return ""
+			}, func() []string { return nil }, bytes.NewReader(encoded), &stdout, &stderr, testConfig(client))
 			if code != 0 {
 				t.Fatalf("exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
 			}
@@ -128,6 +130,7 @@ func TestRunContinuesAfterUnavailableToolCall(t *testing.T) {
 					return "secret"
 				}
 				return ""
+			}, func() []string { return nil }, strings.NewReader(`{"prompt":"hello","disallowed_tools":["Bash"]}`), &stdout, &stderr, testConfig(client))
 			if code != 0 {
 				t.Fatalf("exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
 			}

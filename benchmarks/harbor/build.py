@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 
+def build(revision: str, output: Path, arch: str, runner: str) -> None:
     repo = Path(__file__).resolve().parents[2]
     commit = subprocess.check_output(
         ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=repo, text=True
@@ -38,12 +39,15 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
         data = binary.read_bytes()
         manifest = {
             "revision": commit,
+            "runner": runner,
             "sha256": hashlib.sha256(data).hexdigest(),
             "goos": "linux",
             "goarch": arch,
             "go_version": subprocess.check_output(["go", "version"], text=True).strip(),
         }
         output.mkdir(parents=True)
+        (output / "unreal-agent-runner").write_bytes(data)
+        (output / "unreal-agent-runner").chmod(0o755)
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Built {commit} ({manifest['sha256']}) in {output}")
 
@@ -51,6 +55,10 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", default="HEAD")
+    parser.add_argument(
+        "--runner",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
     args = parser.parse_args()
+    build(args.revision, args.output, args.arch, args.runner)

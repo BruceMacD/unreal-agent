@@ -88,6 +88,7 @@ func TestRunMainHeartbeatReleasesWaitingBashAndReplays(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := RunMain(ctx, args, getenv, func() []string { return nil },
 		strings.NewReader(`{"prompt":"run it","session_id":"heartbeat-session"}`),
+		&stdout, &stderr, testConfig(client)); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	if !released || !finished {
@@ -139,6 +140,7 @@ func TestRunMainHeartbeatReleasesWaitingBashAndReplays(t *testing.T) {
 	}}
 	if code := RunMain(ctx, args, getenv, func() []string { return nil },
 		strings.NewReader(`{"prompt":"summarize","session_id":"heartbeat-session"}`),
+		io.Discard, &stderr, testConfig(resumed)); code != 0 {
 		t.Fatalf("resume exit = %d, stderr = %s", code, stderr.String())
 	}
 }
@@ -149,6 +151,7 @@ func TestRunMainRejectsInvalidHeartbeatInterval(t *testing.T) {
 			var stderr bytes.Buffer
 			code := RunMain(t.Context(), []string{"-tool-heartbeat-interval", interval},
 				func(string) string { return "" }, func() []string { return nil },
+				strings.NewReader(`{"prompt":"hello"}`), io.Discard, &stderr, Config{Name: "unreal-agent-runner", ParseRequest: parseTestRequest})
 			if code != 1 || !strings.Contains(stderr.String(), "heartbeat") {
 				t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 			}

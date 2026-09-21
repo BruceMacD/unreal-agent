@@ -20,8 +20,10 @@ func TestOutputLengthMaximumMatchesToolSchemas(t *testing.T) {
 	if err != nil || limit != operation.MaxOutputLength {
 		t.Fatalf("maximum output length = %d, error = %v", limit, err)
 	}
+	registry := tool.NewRegistry(tool.StaticTranslators{}, tool.BashName)
 	checked := 0
 	for _, definition := range registry.StaticDefinitions() {
+		if definition.Tool.Name != tool.BashName {
 			continue
 		}
 		properties := definition.Tool.Parameters["properties"].(map[string]any)
@@ -31,6 +33,8 @@ func TestOutputLengthMaximumMatchesToolSchemas(t *testing.T) {
 		}
 		checked++
 	}
+	if checked != 1 {
+		t.Fatalf("checked %d tool schemas, want 1", checked)
 	}
 }
 
@@ -72,6 +76,9 @@ func TestValidationErrorsAreBoundedBeforeResultTranslation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			output, found := strings.CutPrefix(result.Output[0].Value, "Error: ")
+			if !found {
+				t.Fatalf("Bash validation error has no error label: %q", result.Output[0].Value)
 			}
 			if output != status.Error {
 				t.Fatal("result translation changed the prepared validation error")

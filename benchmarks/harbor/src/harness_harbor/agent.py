@@ -127,6 +127,7 @@ class UnrealAgent(BaseInstalledAgent):
             "model": self._model,
             "thinking_level": self._thinking_level,
             "session_id": self._runner_session,
+            "disallowed_tools": ["SkillUse"],
         }
         await self.exec_as_agent(
             environment, command=f"mkdir -p {shlex.quote(str(logs))}"

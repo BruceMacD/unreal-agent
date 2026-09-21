@@ -21,6 +21,7 @@ func TestCoordinatorResumesUnavailableTool(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newStopTestRun(t, 1)
+				wantError := `tool "ViewImage" is not available`
 				switch stage {
 				case "untranslated":
 					run.store.items = run.store.items[:2]
@@ -60,6 +61,7 @@ func TestCoordinatorResumesUnavailableTool(t *testing.T) {
 				}
 				select {
 				case err := <-run.done:
+					if err == nil || !strings.Contains(err.Error(), `tool "ViewImage" required by recorded call "call-0" is not available`) {
 						t.Fatalf("Run error = %v, want unavailable-tool error", err)
 					}
 				default:

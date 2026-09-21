@@ -35,11 +35,14 @@ func (translator *fixedTranslator) TranslateResult(
 	return translator.result, nil
 }
 
+func TestRegistryHasFixedDefinitionsAndInjectedTranslators(t *testing.T) {
 	translators := StaticTranslators{
 		Bash:      &fixedTranslator{},
 		ViewImage: &fixedTranslator{},
 	}
+	registry := NewRegistry(translators, BashName, ViewImageName, SkillUseName)
 	definitions := registry.StaticDefinitions()
+	wantNames := []string{BashName, ViewImageName, SkillUseName}
 	if len(definitions) != len(wantNames) {
 		t.Fatalf("static definitions = %#v", definitions)
 	}

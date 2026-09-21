@@ -33,6 +33,7 @@ func TestCoordinatorHeartbeatsWhileWaitingForTools(t *testing.T) {
 		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
 		wantReason := "Heartbeat: waited 60 seconds for tool calls.\nRunning: " +
+			`[{"CallID":"call-0","Name":"ViewImage","Arguments":"{}"},{"CallID":"call-1","Name":"ViewImage","Arguments":"{}"}]`
 		if reason := latestHeartbeatReason(t, run); reason != wantReason {
 			t.Fatalf("heartbeat reason = %q, want %q", reason, wantReason)
 		}
@@ -118,6 +119,7 @@ func TestCoordinatorHeartbeatYieldsToSteeringAndResults(t *testing.T) {
 		advanceHeartbeatTime(time.Nanosecond + (2 * slurpIdleTimeout))
 		assertHeartbeatCount(t, run, 1)
 		wantReason := "Heartbeat: waited 60 seconds for tool calls.\nRunning: " +
+			`[{"CallID":"call-1","Name":"ViewImage","Arguments":"{}"}]`
 		if reason := latestHeartbeatReason(t, run); reason != wantReason {
 			t.Fatalf("heartbeat reason = %q, want only the remaining call: %q", reason, wantReason)
 		}

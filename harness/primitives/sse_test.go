@@ -49,6 +49,7 @@ func TestSSEData(t *testing.T) {
 		{name: "leading BOM", frame: "\ufeffdata: hello", want: "hello"},
 		{name: "leading BOM and BOM in data", frame: "\ufeffdata: \ufefftext", want: "\ufefftext"},
 		{name: "opaque bytes", frame: "data: \xff\xfe", want: "\xff\xfe"},
+		{name: "JSON-RPC message", frame: `event: message
 id: session/stream/1
 data: {"jsonrpc":"2.0","id":1,"result":{}}`, want: `{"jsonrpc":"2.0","id":1,"result":{}}`},
 		{name: "application sentinel", frame: "data: [DONE]", want: "[DONE]"},

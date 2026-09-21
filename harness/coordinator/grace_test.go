@@ -10,6 +10,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
 func TestCoordinatorToolGraceBatchesCompletionsUntilAllCallsFinish(t *testing.T) {
@@ -190,6 +191,7 @@ func TestCoordinatorToolGraceDiscardsPreviousDeadline(t *testing.T) {
 }
 
 func TestCoordinatorImmediateToolStatusBypassesGrace(t *testing.T) {
+	for _, name := range []string{tool.ViewImageName, "unavailable"} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				run := newToolGraceTestRun(t)
@@ -260,6 +262,7 @@ func newToolGraceTestRun(t *testing.T) *stopTestRun {
 	}
 	translator := &submissionTranslator{}
 	translator.specs = []operation.Spec{spec}
+	run.current.dependencies.Tools = tool.NewRegistry(tool.StaticTranslators{Bash: translator, ViewImage: operationStatusTranslator{}}, tool.BashName, tool.ViewImageName)
 	return run
 }
 
@@ -267,6 +270,7 @@ func toolGraceResponse(callIDs ...string) llm.Response {
 	var response llm.Response
 	for _, id := range callIDs {
 		response.Output = append(response.Output, llm.Item{Type: llm.ItemToolCall, Data: llm.ToolCall{
+			CallID: id, Name: tool.BashName, Arguments: `{}`,
 		}})
 	}
 	return response
