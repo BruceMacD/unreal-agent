@@ -3,34 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      revision:
-        description: Full commit SHA to validate (including a PR head)
-        required: true
-        type: string
 
 permissions: {}
 
 jobs:
-  revision:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    outputs:
-      sha: ${{ steps.revision.outputs.sha }}
-    steps:
-      - id: revision
-        env:
-          REVISION: ${{ inputs.revision || github.sha }}
-        shell: bash
-        run: |
-          [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]
-          echo "sha=$REVISION" >> "$GITHUB_OUTPUT"
-          echo "Testing commit: $REVISION" >> "$GITHUB_STEP_SUMMARY"
-
   go:
-    needs: revision
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.revision.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -52,7 +31,6 @@ jobs:
 
   fuzz:
     name: Fuzzing (${{ matrix.target }})
-    needs: revision
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -72,7 +50,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.revision.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -89,7 +66,6 @@ jobs:
           retention-days: 7
 
   harbor:
-    needs: revision
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -97,7 +73,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.revision.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
