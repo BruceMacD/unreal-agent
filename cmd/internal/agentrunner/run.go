@@ -159,20 +159,49 @@ func Run(
 	}
 	flags := flag.NewFlagSet(config.Name, flag.ContinueOnError)
 	flags.SetOutput(flagOutput)
+	var usageErr error
+	flags.Usage = func() {
+		usageErr = writeUsage(flags)
+	}
+	var prompt *string
+	flags.Func("p", "send a request with the given `prompt` without reading stdin", func(value string) error {
+		prompt = &value
+		return nil
+	})
 	sessionDirectory := flags.String("session-directory", defaultSessionDirectory, "directory containing session files")
 	workspaceDirectory := flags.String("workspace", ".", "agent workspace and Bash working directory")
 	logDirectory := flags.String("log-directory", "", "session JSONL log directory; defaults to <workspace>/logs")
 	toolHeartbeatInterval := flags.Duration("tool-heartbeat-interval", 10*time.Minute, "tool-wait heartbeat interval (0 disables)")
 	if err := flags.Parse(args); err != nil {
+		if usageErr != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return usageErr
+			}
+			return errors.Join(err, usageErr)
+		}
 		return err
 	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+	if flags.NArg() > 1 {
+		return errors.New("expected at most one positional JSON request")
+	}
+	if prompt != nil && flags.NArg() != 0 {
+		return errors.New("-p cannot be combined with a positional JSON request")
 	}
 	if *toolHeartbeatInterval < 0 {
 		return errors.New("tool heartbeat interval must not be negative")
 	}
 
+	if prompt != nil {
+		encoded, err := json.Marshal(struct {
+			Prompt string `json:"prompt"`
+		}{Prompt: *prompt})
+		if err != nil {
+			return fmt.Errorf("encode prompt request: %w", err)
+		}
+		input = bytes.NewReader(encoded)
+	} else if flags.NArg() == 1 {
+		input = strings.NewReader(flags.Arg(0))
+	}
 	parsed, newTools, err := config.ParseRequest(input)
 	if err != nil {
 		return err
