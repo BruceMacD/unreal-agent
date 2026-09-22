@@ -40,3 +40,16 @@ OpenAI is the default provider. Set `UNREAL_HARNESS_LLM_PROVIDER` to `openai`,
 `UNREAL_HARNESS_LLM_MODEL` to choose a model.
 
 Run `unreal-agent-runner -h` for options and the JSON request fields.
+
+## Docker
+
+The `unrea1labs/unreal-agent` image supports Linux on AMD64 and ARM64. Run it
+with a project mounted as the workspace:
+
+```sh
+docker run --rm -i --user "$(id -u):$(id -g)" \
+  -e OPENAI_API_KEY -v "$PWD:/workspace" \
+  unrea1labs/unreal-agent:latest -p 'Summarize this project.'
+```
+
+Each release also publishes its Git tag (for example, `v0.1.0`) for version pinning.
